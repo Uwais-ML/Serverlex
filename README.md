@@ -2,11 +2,10 @@
 **The Production-Safe Machine Learning Preprocessing, Diagnostics, & Serving Platform**
 
 [![Python Version](https://img.shields.io/badge/python-3.9%20%7C%203.10%20%7C%203.11-blue.svg)](https://www.python.org/)
-[![PyPI](https://img.shields.io/badge/pypi-coming%20soon-orange.svg)](https://pypi.org/)
+[![PyPI version](https://img.shields.io/pypi/v/serverlex.svg?color=blue)](https://pypi.org/project/serverlex/)
+[![PyPI Downloads](https://img.shields.io/pypi/dm/serverlex.svg)](https://pypi.org/project/serverlex/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Code Style](https://img.shields.io/badge/code%20style-flat%20%26%20clean-green.svg)](https://github.com/)
-
-> 🚀 **Coming Soon to PyPI!** Serverlex is currently undergoing final release preparations and will soon be installable with a simple `pip install serverlex`. Star this repository to get notified when the initial PyPI package is published!
+[![Code Style](https://img.shields.io/badge/code%20style-flat%20%26%20clean-green.svg)](https://github.com/Uwais-ML/Serverlex)
 
 **Serverlex** is an end-to-end Python library that takes raw, dirty data and transforms it into model-ready features, baseline benchmarks, tuned algorithms, and live production endpoints—all without data leakage or boilerplate code.
 
@@ -14,17 +13,18 @@
 
 ## 📦 Installation
 
-### Coming Soon via PyPI:
+Install the official release directly from [PyPI](https://pypi.org/project/serverlex/):
+
 ```bash
 pip install serverlex
 ```
 
-### Current Installation (From GitHub / Source):
+### Or Install From Source / GitHub:
 ```bash
-# Direct from GitHub:
+# Latest development branch from GitHub:
 pip install git+https://github.com/Uwais-ML/Serverlex.git
 
-# Or install locally in editable mode:
+# Or clone and install in editable mode:
 git clone https://github.com/Uwais-ML/Serverlex.git
 cd Serverlex
 pip install -e .
