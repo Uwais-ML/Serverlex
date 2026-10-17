@@ -74,10 +74,10 @@ class MLPipeline:
             logger.info("Fitting pipeline on %d rows (target=%s, encode=%s, scale=%s)", len(self.data), self.target, self.encode, self.scale)
 
             # 0. Auto-detect object columns that are predominantly numeric (≥70% parseable).
-            #    This handles columns read as strings from dirty CSVs (e.g. "9.6 GB", "0,0")
+            #    This handles columns read as strings from dirty CSVs (e.g. "9.6 GB", "50 kg", "0,0")
             #    so they are coerced to numeric rather than one-hot encoded as categoricals.
-            _UNIT_PAT = r'(?i)\s*(gb|mb|kb|yrs?|%)\s*$'
-            _SYM_PAT = r'[₹\$,/\s]'
+            _UNIT_PAT = r'(?i)\s*(gb|mb|kb|tb|pb|yrs?|years?|months?|days?|hours?|hrs?|mins?|sec|seconds?|%|km|miles?|kg|lbs?)\s*$'
+            _SYM_PAT = r'[₹\$,/€£¥\s]'
             _auto_numeric = set(numeric_string_cols or [])
             for col in self.data.select_dtypes(include=['object', 'string']).columns:
                 if self.target and col.strip().lower() == self.target:
@@ -217,16 +217,16 @@ class MLPipeline:
             out.columns=out.columns.str.strip().str.lower().str.replace(' ', '_').str.replace(r'[^\w_]', '', regex=True)
 
             # Clean numeric string columns using saved self.numeric_string_cols
+            _UNIT_PAT2 = r'(?i)\s*(gb|mb|kb|tb|pb|yrs?|years?|months?|days?|hours?|hrs?|mins?|sec|seconds?|%|km|miles?|kg|lbs?)\s*$'
+            _SYM_PAT2 = r'[₹\$,/€£¥]'
             if hasattr(self, 'numeric_string_cols') and self.numeric_string_cols:
                 for col in self.numeric_string_cols:
                     if col in out.columns:
-                        cleaned=out[col].astype(str).str.replace(r'[₹\$,/]', '', regex=True).str.replace(r'(?i)\s*(gb|mb|kb|yrs?|%)\s*$', '', regex=True).str.replace(',', '.', regex=False).str.strip()
+                        cleaned=out[col].astype(str).str.replace(_SYM_PAT2, '', regex=True).str.replace(_UNIT_PAT2, '', regex=True).str.replace(',', '.', regex=False).str.strip()
                         out[col]=pd.to_numeric(cleaned, errors='coerce')
 
             # Also coerce any num_fill column that is still string/object dtype
             # (handles auto-detected columns stored after column name cleaning)
-            _UNIT_PAT2 = r'(?i)\s*(gb|mb|kb|yrs?|%)\s*$'
-            _SYM_PAT2 = r'[₹\$,/]'
             for col in list(self.num_fill.keys()):
                 if col in out.columns and (out[col].dtype == object or str(out[col].dtype).startswith('str')):
                     cleaned = (
