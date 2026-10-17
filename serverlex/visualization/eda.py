@@ -52,18 +52,18 @@ class Visualize:
     # 1. Individual Plot Methods
     # ==========================
 
-    def plot_missing(self, title="Missing Values per Column"):
+    def plot_missing(self, title="Missing Values per Column", save_path=None):
         """Plots a bar chart showing the count of missing values for columns with NaNs."""
         self._sync()
         try:
             if self.data is None:
-                print("No data available to plot.")
+                logger.warning("No data available to plot.")
                 return
 
             missing = self.data.isnull().sum()
             missing = missing[missing > 0]
             if missing.empty:
-                print("No missing values found in dataset.")
+                logger.info("No missing values found in dataset.")
                 return
 
             fig, ax = plt.subplots(figsize=(8, 4))
@@ -73,21 +73,26 @@ class Visualize:
             ax.set_xlabel("Columns")
             plt.xticks(rotation=45, ha="right")
             plt.tight_layout()
-            plt.show()
+            if save_path:
+                plt.savefig(save_path)
+                plt.close(fig)
+            else:
+                plt.show()
         except Exception as e:
-            print(e)
+            logger.error("Error in plot_missing: %s", e)
+            raise
 
-    def plot_distribution(self, column=None, bins=20):
+    def plot_distribution(self, column=None, bins=20, save_path=None):
         """Plots histograms for one or all numerical columns."""
         self._sync()
         try:
             if self.data is None:
-                print("No data available to plot.")
+                logger.warning("No data available to plot.")
                 return
 
             num_cols = self.data.select_dtypes(include="number").columns
             if len(num_cols) == 0:
-                print("No numerical columns available.")
+                logger.warning("No numerical columns available.")
                 return
 
             cols = [column] if column else num_cols
@@ -100,21 +105,26 @@ class Visualize:
                     axes[0, i].set_xlabel(col)
                     axes[0, i].set_ylabel("Frequency")
             plt.tight_layout()
-            plt.show()
+            if save_path:
+                plt.savefig(save_path)
+                plt.close(fig)
+            else:
+                plt.show()
         except Exception as e:
-            print(e)
+            logger.error("Error in plot_distribution: %s", e)
+            raise
 
-    def plot_box(self, columns=None, title="Outlier Detection (Box Plot)"):
+    def plot_box(self, columns=None, title="Outlier Detection (Box Plot)", save_path=None):
         """Plots box plots for numeric columns to visualize outliers."""
         self._sync()
         try:
             if self.data is None:
-                print("No data available to plot.")
+                logger.warning("No data available to plot.")
                 return
 
             num_df = self.data.select_dtypes(include="number")
             if num_df.empty:
-                print("No numerical columns for box plot.")
+                logger.warning("No numerical columns for box plot.")
                 return
 
             if columns:
@@ -126,26 +136,31 @@ class Visualize:
             ax.set_title(title, fontsize=12, fontweight="bold")
             plt.xticks(rotation=45, ha="right")
             plt.tight_layout()
-            plt.show()
+            if save_path:
+                plt.savefig(save_path)
+                plt.close(fig)
+            else:
+                plt.show()
         except Exception as e:
-            print(e)
+            logger.error("Error in plot_box: %s", e)
+            raise
 
-    def plot_categorical(self, column=None, top_n=10, title=None):
+    def plot_categorical(self, column=None, top_n=10, title=None, save_path=None):
         """Plots horizontal bar chart of top N categories."""
         self._sync()
         try:
             if self.data is None:
-                print("No data available to plot.")
+                logger.warning("No data available to plot.")
                 return
 
             cat_cols = self.data.select_dtypes(include=["object", "category"]).columns
             if len(cat_cols) == 0:
-                print("No categorical columns available.")
+                logger.warning("No categorical columns available.")
                 return
 
             col = column if column else cat_cols[0]
             if col not in self.data.columns:
-                print(f"Column '{col}' not found.")
+                logger.warning("Column '%s' not found.", col)
                 return
 
             counts = self.data[col].value_counts().head(top_n)
@@ -155,21 +170,26 @@ class Visualize:
             ax.set_title(title or f"Top {top_n} Categories in '{col}'", fontsize=12, fontweight="bold")
             ax.set_xlabel("Count")
             plt.tight_layout()
-            plt.show()
+            if save_path:
+                plt.savefig(save_path)
+                plt.close(fig)
+            else:
+                plt.show()
         except Exception as e:
-            print(e)
+            logger.error("Error in plot_categorical: %s", e)
+            raise
 
-    def plot_correlation(self, title="Correlation Matrix Heatmap"):
+    def plot_correlation(self, title="Correlation Matrix Heatmap", save_path=None):
         """Plots a correlation heatmap for numerical features using matplotlib."""
         self._sync()
         try:
             if self.data is None:
-                print("No data available to plot.")
+                logger.warning("No data available to plot.")
                 return
 
             num_df = self.data.select_dtypes(include="number")
             if num_df.shape[1] < 2:
-                print("Need at least 2 numerical columns for correlation plot.")
+                logger.warning("Need at least 2 numerical columns for correlation plot.")
                 return
 
             corr = num_df.corr()
@@ -182,7 +202,6 @@ class Visualize:
             ax.set_xticklabels(corr.columns, rotation=45, ha="right")
             ax.set_yticklabels(corr.columns)
 
-            # Annotate correlation values in cells
             for i in range(len(corr)):
                 for j in range(len(corr.columns)):
                     val = corr.iloc[i, j]
@@ -190,20 +209,25 @@ class Visualize:
 
             ax.set_title(title, fontsize=12, fontweight="bold")
             plt.tight_layout()
-            plt.show()
+            if save_path:
+                plt.savefig(save_path)
+                plt.close(fig)
+            else:
+                plt.show()
         except Exception as e:
-            print(e)
+            logger.error("Error in plot_correlation: %s", e)
+            raise
 
-    def plot_scatter(self, x, y, title=None):
+    def plot_scatter(self, x, y, title=None, save_path=None):
         """Plots a scatter plot between two numerical columns."""
         self._sync()
         try:
             if self.data is None:
-                print("No data available to plot.")
+                logger.warning("No data available to plot.")
                 return
 
             if x not in self.data.columns or y not in self.data.columns:
-                print(f"One or both columns ({x}, {y}) not in DataFrame.")
+                logger.warning("One or both columns (%s, %s) not in DataFrame.", x, y)
                 return
 
             fig, ax = plt.subplots(figsize=(6, 4))
@@ -213,9 +237,14 @@ class Visualize:
             ax.set_ylabel(y)
             ax.grid(True, linestyle="--", alpha=0.5)
             plt.tight_layout()
-            plt.show()
+            if save_path:
+                plt.savefig(save_path)
+                plt.close(fig)
+            else:
+                plt.show()
         except Exception as e:
-            print(e)
+            logger.error("Error in plot_scatter: %s", e)
+            raise
 
     # ==============================================================
     # 2. Live Interactive Cleaning Pipeline with plt.ion()

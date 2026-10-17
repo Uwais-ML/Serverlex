@@ -6,25 +6,12 @@ with open("README.md", "r", encoding="utf-8") as fh:
 
 setup(
     name="serverlex",
-    version="1.2.0",
+    version="1.2.1",
     author="Serverlex Team",
     description="Production-Safe ML Preprocessing, Diagnostics, Tuning, and Serving Platform",
     long_description=long_description,
     long_description_content_type="text/markdown",
     packages=find_packages(),
-    py_modules=[
-        "Clean",
-        "Visualization",
-        "DataCheck",
-        "Pipeline",
-        "FeatureSelector",
-        "ModelHyperparameter",
-        "EnsembleBuilder",
-        "Evaluation",
-        "Explainability",
-        "ModelDeployer",
-        "DriftDetector",
-    ],
     classifiers=[
         "Programming Language :: Python :: 3",
         "License :: OSI Approved :: MIT License",

@@ -87,19 +87,46 @@ class DriftDetector:
             logger.info("Running drift detection across %d features (alpha=%.3f, psi_threshold=%.2f)", len(ref_cols), self.alpha, self.psi_threshold)
 
             for col in common_cols:
-                # 2. Numerical Drift
+                ref_series = self.ref_data[col].dropna()
+                cur_series = cur_data[col].dropna()
+
+                if len(ref_series) == 0 or len(cur_series) == 0:
+                    continue
+
+                # 2. Check Constant Shift (was constant in reference, altered in current)
+                if ref_series.nunique() <= 1:
+                    ref_val = ref_series.iloc[0] if len(ref_series) > 0 else None
+                    is_shifted = (cur_series.nunique() > 1) or (cur_series.nunique() == 1 and cur_series.iloc[0] != ref_val)
+                    if is_shifted:
+                        drift_count += 1
+                        logger.warning("Constant feature shift detected in '%s' (ref=%s, cur_unique=%s)", col, ref_val, cur_series.unique())
+                        self.drift_results.append({
+                            "Feature": col,
+                            "Type": "Constant Shift",
+                            "Statistic": None,
+                            "P_Value": 0.0,
+                            "PSI": 1.0,
+                            "Wasserstein": None,
+                            "Drift_Detected": True,
+                            "Severity": "High"
+                        })
+                        continue
+
+                # 3. Numerical Drift
                 if pd.api.types.is_numeric_dtype(self.ref_data[col]):
-                    ref_vals=self.ref_data[col].dropna()
-                    cur_vals=cur_data[col].dropna()
+                    ref_vals = ref_series
+                    cur_vals = cur_series
 
-                    if len(ref_vals) > 0 and len(cur_vals) > 0:
-                        stat, p_val = ks_2samp(ref_vals, cur_vals)
-                        psi = self.calculate_psi(ref_vals, cur_vals)
-                        w_dist = float(np.round(wasserstein_distance(ref_vals, cur_vals), 4))
+                    stat, p_val = ks_2samp(ref_vals, cur_vals)
+                    psi = self.calculate_psi(ref_vals, cur_vals)
+                    w_dist = float(np.round(wasserstein_distance(ref_vals, cur_vals), 4))
 
-                        # Avoid false positives: require practical shift (PSI >= threshold) OR severe shift
+                    # Guard against small sample noise: KS p-value requires sample size >= 10
+                    if len(cur_vals) < 10:
+                        is_drift = False
+                        severity = "Insufficient Samples (< 10)"
+                    else:
                         is_drift = (psi >= self.psi_threshold) or (p_val < self.alpha and psi >= 0.10)
-                        
                         if psi >= 0.25:
                             severity = "High"
                         elif psi >= 0.10:
@@ -107,25 +134,39 @@ class DriftDetector:
                         else:
                             severity = "None"
 
-                        if is_drift:
-                            drift_count += 1
-                            logger.warning("Data drift detected in '%s' (KS=%.4f, p=%.5f, PSI=%.4f, Wasserstein=%.4f, Severity=%s)", col, stat, p_val, psi, w_dist, severity)
+                    if is_drift:
+                        drift_count += 1
+                        logger.warning("Data drift detected in '%s' (KS=%.4f, p=%.5f, PSI=%.4f, Wasserstein=%.4f, Severity=%s)", col, stat, p_val, psi, w_dist, severity)
 
-                        self.drift_results.append({
-                            "Feature": col,
-                            "Type": "Numerical",
-                            "Statistic": round(stat, 4),
-                            "P_Value": round(p_val, 5),
-                            "PSI": psi,
-                            "Wasserstein": w_dist,
-                            "Drift_Detected": is_drift,
-                            "Severity": severity
-                        })
+                    self.drift_results.append({
+                        "Feature": col,
+                        "Type": "Numerical",
+                        "Statistic": round(stat, 4),
+                        "P_Value": round(p_val, 5),
+                        "PSI": psi,
+                        "Wasserstein": w_dist,
+                        "Drift_Detected": is_drift,
+                        "Severity": severity
+                    })
 
-                # 3. Categorical Drift
+                # 4. Categorical Drift
                 else:
                     ref_counts=self.ref_data[col].astype(str).value_counts()
                     cur_counts=cur_data[col].astype(str).value_counts()
+
+                    # Guard against tiny batches: Chi-square and PSI are unstable for n < 10
+                    if len(cur_series) < 10:
+                        self.drift_results.append({
+                            "Feature": col,
+                            "Type": "Categorical",
+                            "Statistic": None,
+                            "P_Value": 1.0,
+                            "PSI": 0.0,
+                            "Wasserstein": None,
+                            "Drift_Detected": False,
+                            "Severity": "Insufficient Samples (< 10)"
+                        })
+                        continue
 
                     all_cats=list(set(ref_counts.index).union(set(cur_counts.index)))
                     ref_aligned=np.array([ref_counts.get(cat, 0) for cat in all_cats], dtype=float)

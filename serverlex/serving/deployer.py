@@ -15,14 +15,24 @@ if not logger.handlers:
     logger.setLevel(logging.INFO)
 
 
+import hmac
+
 class _LoadDescriptor:
     def __get__(self, instance, owner):
         if instance is None:
             # Invoked as class method: ModelDeployer.load("bundle.joblib")
-            def _load_as_class(filepath="model_bundle.joblib", verify_hash=False):
-                if verify_hash:
-                    owner._verify_bundle_integrity(filepath)
-                bundle = joblib.load(filepath)
+            def _load_as_class(filepath="model_bundle.joblib", verify_hash=None, hmac_key=None):
+                has_sidecar = os.path.exists(filepath + ".sha256") or os.path.exists(filepath + ".hmac")
+                should_verify = verify_hash is True or (verify_hash is None and has_sidecar) or (hmac_key is not None)
+                if should_verify:
+                    owner._verify_bundle_integrity(filepath, hmac_key=hmac_key)
+                try:
+                    bundle = joblib.load(filepath)
+                    if not isinstance(bundle, dict):
+                        raise ValueError(f"Expected dict bundle artifact, got {type(bundle)}")
+                except Exception as e:
+                    raise ValueError(f"Corrupt or invalid model bundle '{filepath}': {e}") from e
+
                 deployer = owner(
                     pipeline=bundle.get("pipeline"),
                     model=bundle.get("model"),
@@ -33,10 +43,18 @@ class _LoadDescriptor:
             return _load_as_class
         else:
             # Invoked as instance method: loaded_deployer.load("bundle.joblib")
-            def _load_as_instance(filepath="model_bundle.joblib", verify_hash=False):
-                if verify_hash:
-                    instance._verify_bundle_integrity(filepath)
-                bundle = joblib.load(filepath)
+            def _load_as_instance(filepath="model_bundle.joblib", verify_hash=None, hmac_key=None):
+                has_sidecar = os.path.exists(filepath + ".sha256") or os.path.exists(filepath + ".hmac")
+                should_verify = verify_hash is True or (verify_hash is None and has_sidecar) or (hmac_key is not None)
+                if should_verify:
+                    instance._verify_bundle_integrity(filepath, hmac_key=hmac_key)
+                try:
+                    bundle = joblib.load(filepath)
+                    if not isinstance(bundle, dict):
+                        raise ValueError(f"Expected dict bundle artifact, got {type(bundle)}")
+                except Exception as e:
+                    raise ValueError(f"Corrupt or invalid model bundle '{filepath}': {e}") from e
+
                 instance.pipeline = bundle.get("pipeline")
                 instance.model = bundle.get("model")
                 instance.metadata = bundle.get("metadata", {})
@@ -52,8 +70,8 @@ class ModelDeployer:
     - Saves and loads via joblib supporting class-level, instance-level, and constructor loading.
     - Schema Validation: Auto-imputes missing inference keys using learned training pipeline statistics.
     - Currency & Type Resilience: Preserves currency strings for pipeline cleaning rather than wiping them.
-    - Strict Mode: When strict=True, raises ValueError if required features are missing from payload.
-    - Cryptographic Bundle Verification: Optional SHA-256 integrity check.
+    - Strict Mode: When strict=True, raises ValueError if required features are missing, unseen categories are passed, or non-numeric values are given to numeric fields.
+    - Cryptographic Bundle Verification: SHA-256 integrity signature and HMAC authenticity check.
     """
 
     load = _LoadDescriptor()
@@ -62,7 +80,15 @@ class ModelDeployer:
         if isinstance(pipeline, str) and model is None:
             # Direct instantiation with filepath: ModelDeployer("bundle.joblib")
             filepath = pipeline
-            bundle = joblib.load(filepath)
+            if os.path.exists(filepath + ".sha256") or os.path.exists(filepath + ".hmac"):
+                self._verify_bundle_integrity(filepath)
+            try:
+                bundle = joblib.load(filepath)
+                if not isinstance(bundle, dict):
+                    raise ValueError(f"Expected dict bundle artifact, got {type(bundle)}")
+            except Exception as e:
+                raise ValueError(f"Corrupt or invalid model bundle '{filepath}': {e}") from e
+
             self.pipeline = bundle.get("pipeline")
             self.model = bundle.get("model")
             self.metadata = bundle.get("metadata", {})
@@ -83,8 +109,30 @@ class ModelDeployer:
                 sha.update(chunk)
         return sha.hexdigest()
 
+    @staticmethod
+    def _compute_file_hmac(filepath, key):
+        if isinstance(key, str):
+            key = key.encode('utf-8')
+        mac = hmac.new(key, digestmod=hashlib.sha256)
+        with open(filepath, 'rb') as f:
+            while chunk := f.read(8192):
+                mac.update(chunk)
+        return mac.hexdigest()
+
     @classmethod
-    def _verify_bundle_integrity(cls, filepath):
+    def _verify_bundle_integrity(cls, filepath, hmac_key=None):
+        if hmac_key is not None:
+            meta_path = filepath + ".hmac"
+            if not os.path.exists(meta_path):
+                raise FileNotFoundError(f"Authenticity check failed: missing HMAC signature file '{meta_path}'")
+            with open(meta_path, 'r') as f:
+                expected_hmac = f.read().strip()
+            actual_hmac = cls._compute_file_hmac(filepath, hmac_key)
+            if not hmac.compare_digest(actual_hmac, expected_hmac):
+                raise ValueError(f"Bundle authenticity verification failed! HMAC mismatch for '{filepath}'")
+            logger.info("Bundle authenticity verified successfully via HMAC-SHA256")
+            return
+
         meta_path = filepath + ".sha256"
         if not os.path.exists(meta_path):
             raise FileNotFoundError(f"Integrity check failed: missing SHA-256 signature file '{meta_path}'")
@@ -95,7 +143,7 @@ class ModelDeployer:
             raise ValueError(f"Bundle integrity verification failed! Signature mismatch for '{filepath}'")
         logger.info("Bundle integrity verified successfully via SHA-256")
 
-    def save(self, filepath="model_bundle.joblib", compute_hash=False):
+    def save(self, filepath="model_bundle.joblib", compute_hash=False, hmac_key=None):
         if self.pipeline is None or self.model is None:
             raise ValueError("Both pipeline and model must be provided before saving.")
 
@@ -107,7 +155,12 @@ class ModelDeployer:
         joblib.dump(bundle, filepath)
         logger.info("Saved model artifact bundle to '%s'", filepath)
 
-        if compute_hash:
+        if hmac_key is not None:
+            file_hmac = self._compute_file_hmac(filepath, hmac_key)
+            with open(filepath + ".hmac", 'w') as f:
+                f.write(file_hmac)
+            logger.info("Generated HMAC-SHA256 authenticity signature")
+        elif compute_hash:
             file_hash = self._compute_file_hash(filepath)
             with open(filepath + ".sha256", 'w') as f:
                 f.write(file_hash)
@@ -116,41 +169,66 @@ class ModelDeployer:
     def _validate_and_sanitize(self, df, strict=False):
         """
         Validates incoming inference schema, performs safe type coercion without wiping currency strings,
-        and auto-imputes missing keys.
+        and auto-imputes missing keys. In strict mode, verifies unseen categories and invalid types.
         """
         clean_df = df.copy()
 
         # 1. Snake case incoming column names
         clean_df.columns = [c.strip().lower().replace(' ', '_').replace('$', '') for c in clean_df.columns]
 
-        # 2. Check for missing columns learned during pipeline training
-        missing_num = []
+        # 2. Strict mode validation checks before coercion/imputation
+        if strict and self.pipeline is not None:
+            problems = []
+
+            # Check unseen categorical levels
+            if hasattr(self.pipeline, "cat_categories") and self.pipeline.cat_categories:
+                for col, cats in self.pipeline.cat_categories.items():
+                    if col in clean_df.columns:
+                        norm = clean_df[col].dropna().astype(str).str.lower().str.replace(' ', '')
+                        unseen = sorted(set(norm) - set(cats))
+                        if unseen:
+                            problems.append(f"{col}: unseen categories {unseen}")
+
+            # Check non-numeric values in numeric columns
+            if hasattr(self.pipeline, "num_fill") and self.pipeline.num_fill:
+                for col in self.pipeline.num_fill.keys():
+                    if col in clean_df.columns:
+                        raw = clean_df[col]
+                        stripped = raw.astype(str).str.replace(r'[\$,]', '', regex=True).str.strip()
+                        coerced = pd.to_numeric(stripped, errors='coerce')
+                        if (coerced.isna() & raw.notna()).any():
+                            problems.append(f"{col}: non-numeric values")
+
+            # Check missing required training features
+            missing_features = []
+            if hasattr(self.pipeline, "num_fill"):
+                missing_features.extend([c for c in self.pipeline.num_fill.keys() if c not in clean_df.columns])
+            if hasattr(self.pipeline, "cat_fill"):
+                missing_features.extend([c for c in self.pipeline.cat_fill.keys() if c not in clean_df.columns])
+            if missing_features:
+                problems.append(f"missing required training features: {missing_features}")
+
+            if problems:
+                raise ValueError("Strict deployment error: " + "; ".join(problems))
+
+        # 3. Handle numerical missing columns and currency parsing
         if hasattr(self.pipeline, "num_fill") and self.pipeline.num_fill:
             for num_col, fill_val in self.pipeline.num_fill.items():
                 if num_col not in clean_df.columns:
-                    missing_num.append(num_col)
                     clean_df[num_col] = fill_val
                     logger.info("Missing numerical feature '%s' imputed with training baseline: %s", num_col, fill_val)
                 else:
-                    # Clean currency/comma strings BEFORE numeric coercion so values like '$98.50' aren't wiped
                     col_vals = clean_df[num_col]
                     if col_vals.dtype == object or str(col_vals.dtype).startswith('str'):
-                        # If string contains currency or numbers, strip currency symbol
                         stripped = col_vals.astype(str).str.replace(r'[\$,]', '', regex=True).str.strip()
-                        # Only convert if actually numeric
                         clean_df[num_col] = pd.to_numeric(stripped, errors='coerce').fillna(fill_val)
 
-        missing_cat = []
+        # 4. Handle categorical missing columns
         if hasattr(self.pipeline, "cat_fill") and self.pipeline.cat_fill:
             for cat_col, fill_val in self.pipeline.cat_fill.items():
                 if cat_col not in clean_df.columns:
-                    missing_cat.append(cat_col)
                     clean_df[cat_col] = fill_val
                     logger.info("Missing categorical feature '%s' imputed with training baseline: %s", cat_col, fill_val)
-
-        all_missing = missing_num + missing_cat
-        if strict and all_missing:
-            raise ValueError(f"Strict deployment error: inference input missing required training features: {all_missing}")
 
         return clean_df
 

@@ -34,7 +34,9 @@ class ModelEvaluator:
     # ==============================================================
     # 1. Classification Diagnostics
     # ==============================================================
-    def plot_confusion_matrix(self, y_true, y_pred, labels=None, title="Confusion Matrix"):
+    # 1. Classification Diagnostics
+    # ==============================================================
+    def plot_confusion_matrix(self, y_true, y_pred, labels=None, title="Confusion Matrix", save_path=None):
         try:
             cm=confusion_matrix(y_true, y_pred, labels=labels)
             fig, ax=plt.subplots(figsize=(6, 5))
@@ -58,12 +60,17 @@ class ModelEvaluator:
             ax.set_ylabel("Actual Label")
             ax.set_xlabel("Predicted Label")
             plt.tight_layout()
-            plt.show()
+            if save_path:
+                plt.savefig(save_path)
+                plt.close(fig)
+            else:
+                plt.show()
             return cm
         except Exception as e:
             logger.error("Error in plot_confusion_matrix: %s", e)
+            raise
 
-    def plot_roc_curve(self, y_true, y_prob, title="ROC Curve"):
+    def plot_roc_curve(self, y_true, y_prob, title="ROC Curve", save_path=None):
         try:
             y_true_arr = np.asarray(y_true)
             y_prob_arr = np.asarray(y_prob)
@@ -98,14 +105,18 @@ class ModelEvaluator:
             ax.legend(loc="lower right")
             ax.grid(True, linestyle="--", alpha=0.5)
             plt.tight_layout()
-            plt.show()
+            if save_path:
+                plt.savefig(save_path)
+                plt.close(fig)
+            else:
+                plt.show()
             logger.info("ROC-AUC score: %.4f", roc_auc)
             return roc_auc
         except Exception as e:
             logger.error("Error in plot_roc_curve: %s", e)
             raise
 
-    def plot_precision_recall(self, y_true, y_prob, title="Precision-Recall Curve"):
+    def plot_precision_recall(self, y_true, y_prob, title="Precision-Recall Curve", save_path=None):
         try:
             precision, recall, _ = precision_recall_curve(y_true, y_prob)
             fig, ax=plt.subplots(figsize=(6, 5))
@@ -115,14 +126,19 @@ class ModelEvaluator:
             ax.set_title(title, fontsize=12, fontweight="bold")
             ax.grid(True, linestyle="--", alpha=0.5)
             plt.tight_layout()
-            plt.show()
+            if save_path:
+                plt.savefig(save_path)
+                plt.close(fig)
+            else:
+                plt.show()
         except Exception as e:
             logger.error("Error in plot_precision_recall: %s", e)
+            raise
 
     # ==============================================================
     # 2. Regression Diagnostics
     # ==============================================================
-    def plot_actual_vs_predicted(self, y_true, y_pred, title="Actual vs. Predicted"):
+    def plot_actual_vs_predicted(self, y_true, y_pred, title="Actual vs. Predicted", save_path=None):
         try:
             fig, ax=plt.subplots(figsize=(6, 5))
             ax.scatter(y_true, y_pred, alpha=0.6, edgecolors="k", color="royalblue")
@@ -137,11 +153,16 @@ class ModelEvaluator:
             ax.legend()
             ax.grid(True, linestyle="--", alpha=0.5)
             plt.tight_layout()
-            plt.show()
+            if save_path:
+                plt.savefig(save_path)
+                plt.close(fig)
+            else:
+                plt.show()
         except Exception as e:
             logger.error("Error in plot_actual_vs_predicted: %s", e)
+            raise
 
-    def plot_residuals(self, y_true, y_pred, title="Residual Analysis"):
+    def plot_residuals(self, y_true, y_pred, title="Residual Analysis", save_path=None):
         try:
             residuals = np.array(y_true) - np.array(y_pred)
             fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4.5))
@@ -161,9 +182,14 @@ class ModelEvaluator:
 
             plt.suptitle(title, fontsize=13, fontweight="bold")
             plt.tight_layout()
-            plt.show()
+            if save_path:
+                plt.savefig(save_path)
+                plt.close(fig)
+            else:
+                plt.show()
         except Exception as e:
             logger.error("Error in plot_residuals: %s", e)
+            raise
 
     # ==============================================================
     # 3. Deep End-to-End Diagnostics Runner
@@ -183,13 +209,32 @@ class ModelEvaluator:
             logger.info("Evaluating model predictions (task=%s, samples=%d)", self.task, len(self.y_true))
 
             if is_class:
+                from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
                 logger.info("Classification report:\n%s", classification_report(self.y_true, self.y_pred))
                 self.plot_confusion_matrix(self.y_true, self.y_pred)
 
+                acc = accuracy_score(self.y_true, self.y_pred)
+                prec = precision_score(self.y_true, self.y_pred, average='weighted', zero_division=0)
+                rec = recall_score(self.y_true, self.y_pred, average='weighted', zero_division=0)
+                f1_w = f1_score(self.y_true, self.y_pred, average='weighted', zero_division=0)
+                f1_m = f1_score(self.y_true, self.y_pred, average='macro', zero_division=0)
+                roc_auc = None
+
                 if len(np.unique(self.y_true)) == 2 and hasattr(model, "predict_proba"):
                     self.y_prob = model.predict_proba(X)[:, 1]
-                    self.plot_roc_curve(self.y_true, self.y_prob)
+                    roc_auc = self.plot_roc_curve(self.y_true, self.y_prob)
                     self.plot_precision_recall(self.y_true, self.y_prob)
+
+                self.metrics = {
+                    "task": "Classification",
+                    "accuracy": round(float(acc), 4),
+                    "precision_weighted": round(float(prec), 4),
+                    "recall_weighted": round(float(rec), 4),
+                    "f1_weighted": round(float(f1_w), 4),
+                    "f1_macro": round(float(f1_m), 4),
+                    "roc_auc": round(float(roc_auc), 4) if roc_auc is not None else None
+                }
+                return self.metrics
 
             else:
                 r2 = r2_score(self.y_true, self.y_pred)
@@ -198,7 +243,7 @@ class ModelEvaluator:
                 mape = mean_absolute_percentage_error(self.y_true, self.y_pred)
 
                 n = len(self.y_true)
-                p = X.shape[1]
+                p = X.shape[1] if hasattr(X, "shape") and len(X.shape) > 1 else 1
                 adj_r2 = 1 - (1 - r2) * (n - 1) / (n - p - 1) if (n - p - 1) > 0 else r2
 
                 logger.info("Regression metrics: R2=%.4f, Adj_R2=%.4f, RMSE=%.4f, MAE=%.4f, MAPE=%.2f%%",
@@ -207,5 +252,16 @@ class ModelEvaluator:
                 self.plot_actual_vs_predicted(self.y_true, self.y_pred)
                 self.plot_residuals(self.y_true, self.y_pred)
 
+                self.metrics = {
+                    "task": "Regression",
+                    "r2": round(float(r2), 4),
+                    "adj_r2": round(float(adj_r2), 4),
+                    "rmse": round(float(rmse), 4),
+                    "mae": round(float(mae), 4),
+                    "mape": round(float(mape), 4)
+                }
+                return self.metrics
+
         except Exception as e:
             logger.error("Error in evaluate: %s", e)
+            raise

@@ -72,10 +72,23 @@ class MLPipeline:
 
             logger.info("Fitting pipeline on %d rows (target=%s, encode=%s, scale=%s)", len(self.data), self.target, self.encode, self.scale)
 
-            # 1. Clean the training data using your Clean class
-            self.cleaner.total_clean(data_time=data_time, numeric_string_cols=numeric_string_cols, **kwargs)
+            # 1. Clean the training data using your Clean class with target protection
+            clean_kwargs = kwargs.copy()
+            if self.target:
+                exclude = clean_kwargs.get("exclude_outliers", [])
+                if isinstance(exclude, (list, tuple, set)):
+                    exclude = list(exclude)
+                else:
+                    exclude = [exclude]
+                if self.target not in exclude:
+                    exclude.append(self.target)
+                clean_kwargs["exclude_outliers"] = exclude
+                if "corr_target" not in clean_kwargs:
+                    clean_kwargs["corr_target"] = self.target
+
+            self.cleaner.total_clean(data_time=data_time, numeric_string_cols=numeric_string_cols, **clean_kwargs)
             self.data=self.cleaner.data
-            self.cleaner.seperate()
+            self.cleaner.separate()
 
             # 2. Extract datetime features if provided
             if data_time:
@@ -90,14 +103,14 @@ class MLPipeline:
                     self.data=self.data.drop(columns=[col])
 
             self.cleaner.data=self.data
-            self.cleaner.seperate()
+            self.cleaner.separate()
 
             # 3. Memorize missing value fill values directly on self
             for col in self.cleaner.numerical_columns.columns:
                 if col != self.target:
                     self.num_fill[col]=float(self.data[col].mean()) if not self.data[col].dropna().empty else 0.0
 
-            for col in self.cleaner.categrorical_columns.columns:
+            for col in self.cleaner.categorical_columns.columns:
                 if col != self.target:
                     cleaned_series = self.data[col].dropna().astype(str).str.lower().str.replace(' ', '')
                     mode_val = cleaned_series.mode()
@@ -108,7 +121,7 @@ class MLPipeline:
             if self.target and self.target in train_X.columns:
                 train_X=train_X.drop(columns=[self.target])
 
-            cat_cols=[c for c in self.cleaner.categrorical_columns.columns if c != self.target and c in train_X.columns]
+            cat_cols=[c for c in self.cleaner.categorical_columns.columns if c != self.target and c in train_X.columns]
             self.cat_categories = {}
             for col in cat_cols:
                 # Fill missing before string casting (Bug 3 fix)
@@ -149,6 +162,14 @@ class MLPipeline:
                     iqr = q75 - q25
                     self.scaler_median[col] = median_val
                     self.scaler_iqr[col] = iqr if iqr != 0 else 1.0
+
+            # 6. Populate self.X_train and self.y_train so evaluate_baseline_models() works immediately
+            res = self.transform(self.data)
+            if isinstance(res, tuple):
+                self.X_train, self.y_train = res[0], res[1]
+            else:
+                self.X_train = res
+                self.y_train = None
 
             logger.info("Fit complete. Feature count: %d", len(self.feature_columns))
             return self
@@ -238,13 +259,9 @@ class MLPipeline:
 
     def fit_transform(self, df, **kwargs):
         self.fit(df, **kwargs)
-        res = self.transform(df)
-        if isinstance(res, tuple):
-            self.X_train, self.y_train = res[0], res[1]
-        else:
-            self.X_train = res
-            self.y_train = None
-        return res
+        if self.y_train is not None:
+            return self.X_train, self.y_train
+        return self.X_train
 
     # ==========================
     # 3. Custom Models & Evaluation
