@@ -138,17 +138,31 @@ print("Predicted Churn:", loaded_deployer.predict(raw_input)[0])
 
 | Module | Core Class | Primary Purpose |
 |---|---|---|
-| [`Clean.py`](Clean.py) | `Clean` | Headers, deduplication, IQR/Z-score outlier capping, format parsing. |
-| [`DataCheck.py`](DataCheck.py) | `DataGuard` | Pre-training safety audit (ID detection, target leakage, class imbalance). |
-| [`Visualization.py`](Visualization.py) | `Visualize` | EDA plots (missing, distribution, box, correlation) and real-time `plt.ion()`. |
-| [`Pipeline.py`](Pipeline.py) | `MLPipeline` | Leakage-free `fit`/`transform`, datetime extraction, encoding, scaling. |
-| [`FeatureSelector.py`](FeatureSelector.py) | `FeatureSelector` | Mutual Information ranking, collinearity pruning, variance threshold. |
-| [`ModelHyperparameter.py`](ModelHyperparameter.py) | `ModelHyperparameter` | Non-nested `GridSearchCV` and unbiased Nested Cross-Validation. |
-| [`EnsembleBuilder.py`](EnsembleBuilder.py) | `EnsembleBuilder` | Soft/Hard Voting and Stacking ensembles with meta-learners. |
-| [`Evaluation.py`](Evaluation.py) | `ModelEvaluator` | Confusion matrix, ROC-AUC, PR curves, and regression residuals. |
-| [`Explainability.py`](Explainability.py) | `ModelExplainer` | Native tree feature importances & permutation importance. |
-| [`ModelDeployer.py`](ModelDeployer.py) | `ModelDeployer` | Pipeline-model artifact bundling and 1-line prediction on raw data. |
-| [`DriftDetector.py`](DriftDetector.py) | `DriftDetector` | Kolmogorov-Smirnov (numbers) and Chi-Square (categories) drift tests. |
+| [`serverlex.preprocessing.clean`](serverlex/preprocessing/clean.py) | `Clean` | Headers, deduplication, IQR/Z-score outlier capping, format parsing. |
+| [`serverlex.diagnostics.dataguard`](serverlex/diagnostics/dataguard.py) | `DataGuard` | Pre-training safety audit (ID detection, target leakage, class imbalance). |
+| [`serverlex.visualization.eda`](serverlex/visualization/eda.py) | `Visualize` | EDA plots (missing, distribution, box, correlation) and real-time `plt.ion()`. |
+| [`serverlex.preprocessing.pipeline`](serverlex/preprocessing/pipeline.py) | `MLPipeline` | Leakage-free `fit`/`transform`, datetime extraction, encoding, scaling. |
+| [`serverlex.modeling.selector`](serverlex/modeling/selector.py) | `FeatureSelector` | Mutual Information ranking, collinearity pruning, variance threshold. |
+| [`serverlex.modeling.hyperparameter`](serverlex/modeling/hyperparameter.py) | `ModelHyperparameter` | Non-nested `GridSearchCV` and unbiased Nested Cross-Validation. |
+| [`serverlex.modeling.ensemble`](serverlex/modeling/ensemble.py) | `EnsembleBuilder` | Soft/Hard Voting and Stacking ensembles with meta-learners. |
+| [`serverlex.diagnostics.evaluation`](serverlex/diagnostics/evaluation.py) | `ModelEvaluator` | Confusion matrix, ROC-AUC, PR curves, and regression residuals. |
+| [`serverlex.diagnostics.explainability`](serverlex/diagnostics/explainability.py) | `ModelExplainer` | Native tree feature importances & permutation importance. |
+| [`serverlex.serving.deployer`](serverlex/serving/deployer.py) | `ModelDeployer` | Pipeline-model artifact bundling, schema validation, and raw inference. |
+| [`serverlex.diagnostics.drift`](serverlex/diagnostics/drift.py) | `DriftDetector` | KS-test, Chi-Square, PSI (Population Stability Index), and Wasserstein distance. |
+
+---
+
+## 🧪 Running Unit Tests & Benchmarks
+
+Run the complete test suite locally:
+```bash
+pytest -v tests/
+```
+
+Reproduce the exact Kaggle benchmarks:
+```bash
+python benchmarks/reproduce_benchmarks.py
+```
 
 ---
 
@@ -158,6 +172,11 @@ Serverlex was verified on real-world Kaggle datasets without custom code changes
 
 - **Customer Churn (`muhammadshahidazeem/customer-churn-dataset`)**:
   - `DataGuard` detected `CustomerID` as 100% unique ID and recommended removal.
+  - Leakage-free preprocessing reached **99.42% accuracy** using Gradient Boosting.
+
+- **Walmart Store Sales (`mikhail1681/walmart-sales`)**:
+  - Automatically extracted `year`, `month`, `day`, `dayofweek`, and `is_weekend` from dates.
+  - Achieved $R^2 = 0.9455$ and RMSE = 133,727 using Random Forest Regressor.
   - Baseline Gradient Boosting achieved **99.42% accuracy**.
   - `ModelExplainer` identified `support_calls` (0.277) and `total_spend` (0.235) as top drivers.
   

@@ -6,12 +6,12 @@ with open("README.md", "r", encoding="utf-8") as fh:
 
 setup(
     name="serverlex",
-    version="1.0.1",
+    version="1.1.0",
     author="Serverlex Team",
-    description="End-to-End Automated Data Cleaning, ML Preprocessing, Diagnostics, and Deployment Platform",
+    description="Production-Safe ML Preprocessing, Diagnostics, Tuning, and Serving Platform",
     long_description=long_description,
     long_description_content_type="text/markdown",
-    packages=["serverlex"],
+    packages=find_packages(),
     py_modules=[
         "Clean",
         "Visualization",

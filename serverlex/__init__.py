@@ -1,34 +1,27 @@
-import sys
-import os
-
-_parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if _parent_dir not in sys.path:
-    sys.path.insert(0, _parent_dir)
-
-from Clean import Clean
-from Visualization import Visualize
-from DataCheck import DataGuard
-from Pipeline import MLPipeline
-from FeatureSelector import FeatureSelector
-from ModelHyperparameter import ModelHyperparameter
-from EnsembleBuilder import EnsembleBuilder
-from Evaluation import ModelEvaluator
-from Explainability import ModelExplainer
-from ModelDeployer import ModelDeployer
-from DriftDetector import DriftDetector
+from serverlex.preprocessing.clean import Clean
+from serverlex.preprocessing.pipeline import MLPipeline
+from serverlex.diagnostics.dataguard import DataGuard
+from serverlex.diagnostics.evaluation import ModelEvaluator
+from serverlex.diagnostics.explainability import ModelExplainer
+from serverlex.diagnostics.drift import DriftDetector
+from serverlex.modeling.hyperparameter import ModelHyperparameter
+from serverlex.modeling.ensemble import EnsembleBuilder
+from serverlex.modeling.selector import FeatureSelector
+from serverlex.visualization.eda import Visualize
+from serverlex.serving.deployer import ModelDeployer
 
 __all__ = [
     "Clean",
-    "Visualize",
-    "DataGuard",
     "MLPipeline",
-    "FeatureSelector",
-    "ModelHyperparameter",
-    "EnsembleBuilder",
+    "DataGuard",
     "ModelEvaluator",
     "ModelExplainer",
+    "DriftDetector",
+    "ModelHyperparameter",
+    "EnsembleBuilder",
+    "FeatureSelector",
+    "Visualize",
     "ModelDeployer",
-    "DriftDetector"
 ]
 
-__version__ = "1.0.1"
+__version__ = "1.1.0"
