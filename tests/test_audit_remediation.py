@@ -298,3 +298,28 @@ def test_pipeline_auto_coerces_numeric_strings_and_serving(tmp_path):
     pred = loaded.predict(sample, strict=True)
     assert len(pred) == 1
 
+
+def test_pipeline_skips_id_columns_from_encoding():
+    """1.2.4: MLPipeline.fit automatically detects and skips ID columns from categorical encoding."""
+    n = 50
+    df = pd.DataFrame({
+        "cust_id": [f"ID_{i:04d}" for i in range(n)],  # 100% unique -> ID column
+        "category": ["A", "B"] * (n // 2),
+        "feature_num": np.linspace(10, 50, n),
+        "target": [0, 1] * (n // 2)
+    })
+
+    # Default drop_id_cols=True: cust_id should be skipped from encoding
+    pipe = MLPipeline()
+    pipe.fit(df, target="target", encode="onehot")
+    assert "cust_id" not in pipe.cat_categories
+    assert not any(c.startswith("cust_id") for c in pipe.feature_columns)
+    assert "category_b" in pipe.feature_columns
+
+    # Explicit id_cols override
+    pipe_explicit = MLPipeline()
+    pipe_explicit.fit(df, target="target", id_cols=["cust_id"], encode="onehot")
+    assert "cust_id" not in pipe_explicit.cat_categories
+    assert not any(c.startswith("cust_id") for c in pipe_explicit.feature_columns)
+
+

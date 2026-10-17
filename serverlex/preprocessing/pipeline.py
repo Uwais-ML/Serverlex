@@ -33,6 +33,7 @@ class MLPipeline:
         self.scaler_median={}
         self.scaler_iqr={}
         self.date_col=None
+        self.id_cols=[]
         self.custom_models={}
         self.X_train=None
         self.y_train=None
@@ -55,7 +56,7 @@ class MLPipeline:
     # ==========================
     # 1. FIT (Learn & Save on self)
     # ==========================
-    def fit(self, df, target=None, encode='onehot', scale='standard', data_time=None, numeric_string_cols=None, **kwargs):
+    def fit(self, df, target=None, encode='onehot', scale='standard', data_time=None, numeric_string_cols=None, drop_id_cols=True, id_cols=None, **kwargs):
         try:
             valid_scales = ['standard', 'minmax', 'robust', None]
             if scale not in valid_scales:
@@ -70,6 +71,7 @@ class MLPipeline:
             self.encode=encode
             self.scale=scale
             self.numeric_string_cols=[c.strip().lower().replace(' ', '_') for c in (numeric_string_cols or [])]
+            self.drop_id_cols=drop_id_cols
 
             logger.info("Fitting pipeline on %d rows (target=%s, encode=%s, scale=%s)", len(self.data), self.target, self.encode, self.scale)
 
@@ -134,23 +136,49 @@ class MLPipeline:
             self.cleaner.data=self.data
             self.cleaner.separate()
 
-            # 3. Memorize missing value fill values directly on self
+            # 3. Detect and skip ID columns
+            #    DataGuard runs a lightweight uniqueness scan on the *cleaned* data so
+            #    column names are already normalized (e.g. "Cust ID" → "cust_id").
+            _id_cols_set = set()
+            if id_cols is not None:
+                # Caller explicitly supplied the list — normalize and trust it.
+                _id_cols_set = {c.strip().lower().replace(' ', '_') for c in id_cols}
+            elif drop_id_cols:
+                try:
+                    from serverlex.diagnostics.dataguard import DataGuard as _DG
+                    _guard = _DG(self.data)
+                    _guard.check_id_columns()
+                    _id_cols_set = set(getattr(_guard, 'id_cols', []))
+                    if _id_cols_set:
+                        logger.warning(
+                            "DataGuard detected ID column(s) — skipping from encoding and feature matrix: %s. "
+                            "Pass drop_id_cols=False to override.",
+                            sorted(_id_cols_set)
+                        )
+                except Exception:
+                    pass  # DataGuard failure is non-fatal; proceed without exclusion
+            self.id_cols = sorted(list(_id_cols_set))
+
+            # 4. Memorize missing value fill values directly on self (excluding ID columns & target)
             for col in self.cleaner.numerical_columns.columns:
-                if col != self.target:
+                if col != self.target and col not in _id_cols_set:
                     self.num_fill[col]=float(self.data[col].mean()) if not self.data[col].dropna().empty else 0.0
 
             for col in self.cleaner.categorical_columns.columns:
-                if col != self.target:
+                if col != self.target and col not in _id_cols_set:
                     cleaned_series = self.data[col].dropna().astype(str).str.lower().str.replace(' ', '')
                     mode_val = cleaned_series.mode()
                     self.cat_fill[col] = mode_val[0] if not mode_val.empty else 'unknown'
 
-            # 4. Encode categoricals and memorize exact categories
+            # 5. Encode categoricals and memorize exact categories
             train_X=self.data.copy()
+            drop_from_train = set(_id_cols_set)
             if self.target and self.target in train_X.columns:
-                train_X=train_X.drop(columns=[self.target])
+                drop_from_train.add(self.target)
+            train_X=train_X.drop(columns=[c for c in drop_from_train if c in train_X.columns])
 
-            cat_cols=[c for c in self.cleaner.categorical_columns.columns if c != self.target and c in train_X.columns]
+            cat_cols=[c for c in self.cleaner.categorical_columns.columns
+                      if c != self.target and c in train_X.columns and c not in _id_cols_set]
             self.cat_categories = {}
             for col in cat_cols:
                 # Fill missing before string casting (Bug 3 fix)
@@ -246,6 +274,10 @@ class MLPipeline:
                 out[f'{self.date_col}_day']=dt.dt.day
                 out[f'{self.date_col}_dayofweek']=dt.dt.dayofweek
                 out=out.drop(columns=[self.date_col])
+
+            # 2.5 Drop ID columns if present
+            if hasattr(self, 'id_cols') and self.id_cols:
+                out=out.drop(columns=[c for c in self.id_cols if c in out.columns])
 
             # 3. Fill missing using memorized self.num_fill and self.cat_fill
             for col, val in self.num_fill.items():

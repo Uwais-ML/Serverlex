@@ -3,11 +3,11 @@
 
 [![Python Version](https://img.shields.io/badge/python-3.9%20%7C%203.10%20%7C%203.11%20%7C%203.12-blue.svg)](https://www.python.org/)
 [![PyPI version](https://img.shields.io/pypi/v/serverlex.svg?color=blue)](https://pypi.org/project/serverlex/)
-[![Tests](https://img.shields.io/badge/tests-35%20passed-brightgreen.svg)](https://github.com/Uwais-ML/Serverlex/actions)
+[![Tests](https://img.shields.io/badge/tests-39%20passed-brightgreen.svg)](https://github.com/Uwais-ML/Serverlex/actions)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Code Style](https://img.shields.io/badge/code%20style-production%20safe-green.svg)](https://github.com/Uwais-ML/Serverlex)
 
-**Serverlex** is an end-to-end Python library that takes raw, dirty data and transforms it into model-ready features, baseline benchmarks, tuned algorithms, and live production endpoints—with mathematical guarantees against data leakage, train/serve skew, and corrupted inference.
+**Serverlex** is an end-to-end Python library that takes raw, dirty data and transforms it into model-ready features, baseline benchmarks, tuned algorithms, and live production endpoints — with leakage-safe preprocessing (pipeline params are fit on training data only and locked at inference), train/serve parity guarantees, and cryptographically signed model artifacts.
 
 ---
 
@@ -85,10 +85,17 @@ from serverlex import (
 df = pd.read_csv("customers.csv")
 
 # 2. Automated Quality Audit (catches ID columns, target leakage, class imbalance)
-guard = DataGuard(df)
-audit_report = guard.run_audit(target="churn")
+guard = DataGuard(df, target="churn")
+audit_report = guard.run_audit(leakage_threshold=0.90, id_threshold=0.95)
 
-# 3. Fit Pipeline on Training Data (Zero Data Leakage)
+# Drop detected ID / PII columns before fitting — DataGuard advises, pipeline enforces.
+# MLPipeline also auto-skips ID columns internally (drop_id_cols=True by default),
+# but explicit dropping here keeps your training frame clean.
+cols_to_drop = [c for c in guard.id_cols if c in df.columns]
+if cols_to_drop:
+    df = df.drop(columns=cols_to_drop)
+
+# 3. Fit Pipeline on Training Data (Leakage-Safe)
 train_df = df.iloc[:800].copy()
 test_df = df.iloc[800:].copy()
 
@@ -234,7 +241,7 @@ evaluator.plot_confusion_matrix(y_test, preds, save_path="confusion_matrix.png")
 
 ## 🧪 Testing & Verification
 
-Serverlex features a comprehensive automated test suite with **35 unit and regression tests** covering train/serve parity, outlier preservation, crypto authenticity, and drift edge cases:
+Serverlex features a comprehensive automated test suite with **39 unit and regression tests** covering train/serve parity, outlier preservation, crypto authenticity, and drift edge cases:
 
 ```bash
 # Run the test suite:
@@ -248,17 +255,17 @@ python benchmarks/reproduce_benchmarks.py
 
 ---
 
-## 🏆 Real-World Kaggle Verification
+## 🏆 Real-World Validation
 
 Serverlex has been validated on benchmark datasets:
 
 - **Customer Churn (`muhammadshahidazeem/customer-churn-dataset`)**:
-  - `DataGuard` detected `CustomerID` as 100% unique identifier and pruned it.
+  - `DataGuard` correctly flagged `CustomerID` as a 100% unique identifier and excluded it from encoding.
   - Cell-wise outlier clipping preserved `churn` distribution with zero label alteration.
-  - Baseline Gradient Boosting achieved **99.42% accuracy**.
+  - Cross-validated accuracy on clean data (no ID leakage): results vary by CV split and hyperparameters — benchmark on your own data.
 - **Walmart Store Sales (`mikhail1681/walmart-sales`)**:
   - Extracted temporal features from dates (`year`, `month`, `day`, `dayofweek`).
-  - Random Forest Regressor trained to **$R^2 = 0.9455$** ($\text{RMSE} = 133,727$).
+  - Random Forest Regressor trained to **$R^2 = 0.9455$** ($\text{RMSE} = 133{,}727$).
 
 ---
 
