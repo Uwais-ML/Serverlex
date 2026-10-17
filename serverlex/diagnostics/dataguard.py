@@ -13,7 +13,15 @@ if not logger.handlers:
 
 class DataGuard:
     def __init__(self, df=None, target=None):
-        self.data=df.copy() if df is not None else None
+        if df is not None:
+            self.data=df.copy()
+            # Automatically strip embedded header rows (e.g. from CSV concatenation)
+            min_match = max(2, len(self.data.columns) // 2)
+            header_mask = (self.data == self.data.columns).sum(axis=1) >= min_match
+            if header_mask.any():
+                self.data = self.data[~header_mask].reset_index(drop=True)
+        else:
+            self.data=None
         self.target=target
         self.warnings=[]
         self.id_cols=[]
@@ -22,7 +30,27 @@ class DataGuard:
 
     def set_data(self, df):
         self.data=df.copy()
+        if self.data is not None:
+            min_match = max(2, len(self.data.columns) // 2)
+            header_mask = (self.data == self.data.columns).sum(axis=1) >= min_match
+            if header_mask.any():
+                self.data = self.data[~header_mask].reset_index(drop=True)
         self.warnings=[]
+
+    def _get_numeric_coerced_df(self):
+        """Helper to coerce numeric-majority object columns so audit checks are not blinded by string dtypes."""
+        _UNIT_PAT = r'(?i)\s*(gb|mb|kb|tb|pb|yrs?|years?|months?|days?|hours?|hrs?|mins?|sec|seconds?|%|km|miles?|kg|lbs?)\s*$'
+        _SYM_PAT = r'[₹\$,/€£¥\s]'
+        df_coerced = self.data.copy()
+        for col in df_coerced.select_dtypes(include=['object', 'string']).columns:
+            sample = df_coerced[col].dropna().astype(str).str.strip()
+            if sample.empty or len(sample) < 5:
+                continue
+            cleaned = sample.str.replace(_UNIT_PAT, '', regex=True).str.replace(_SYM_PAT, '', regex=True).str.replace(',', '.', regex=False).str.strip()
+            coerced = pd.to_numeric(cleaned, errors='coerce')
+            if coerced.notna().mean() >= 0.70:
+                df_coerced[col] = coerced
+        return df_coerced
 
     # 1. Detect ID Columns
     def check_id_columns(self, threshold=0.95):
@@ -56,12 +84,14 @@ class DataGuard:
             if not target_to_use or target_to_use not in self.data.columns:
                 return []
 
-            num_cols=self.data.select_dtypes(include='number').copy()
+            # Use coerced numeric dataframe so string-formatted leakage (e.g. '$1,200', '0.994') is caught
+            df_coerced = self._get_numeric_coerced_df()
+            num_cols=df_coerced.select_dtypes(include='number').copy()
             if target_to_use not in num_cols.columns:
                 try:
-                    num_cols[target_to_use]=pd.to_numeric(self.data[target_to_use])
+                    num_cols[target_to_use]=pd.to_numeric(df_coerced[target_to_use], errors='coerce')
                 except Exception:
-                    num_cols[target_to_use]=self.data[target_to_use].astype('category').cat.codes
+                    num_cols[target_to_use]=df_coerced[target_to_use].astype('category').cat.codes
 
             if target_to_use in num_cols.columns:
                 corrs=num_cols.corr().abs()[target_to_use]
@@ -89,7 +119,11 @@ class DataGuard:
             if not target_to_use or target_to_use not in self.data.columns:
                 return
 
-            counts=self.data[target_to_use].value_counts(normalize=True)
+            target_series = pd.to_numeric(self.data[target_to_use], errors='coerce').dropna()
+            if target_series.empty:
+                target_series = self.data[target_to_use].dropna()
+
+            counts=target_series.value_counts(normalize=True)
             if len(counts) > 1 and len(counts) <= 20:
                 minority_prop=counts.min()
                 if minority_prop < 0.10:
@@ -107,21 +141,69 @@ class DataGuard:
     def check_cardinality(self, threshold=100):
         try:
             self.high_cardinality_cols=[]
-            cat_cols=self.data.select_dtypes(include=['object', 'category', 'string']).columns
+            # Use coerced numeric dataframe so numerical columns are not falsely treated as categoricals
+            df_coerced = self._get_numeric_coerced_df()
+            cat_cols=df_coerced.select_dtypes(include=['object', 'category', 'string']).columns
+
+            pii_cols = []
+            date_cols = []
+            generic_high_card = []
 
             for col in cat_cols:
-                n_unique=self.data[col].nunique()
-                if n_unique > threshold and col not in self.id_cols:
-                    self.high_cardinality_cols.append((col, n_unique))
+                n_unique=df_coerced[col].nunique()
+                if col in self.id_cols:
+                    continue
+
+                col_clean = re.sub(r'[^\w]', '', col.lower())
+                sample = df_coerced[col].dropna().astype(str).str.strip()
+
+                # Check if it's a datetime column
+                is_name_date = bool(re.search(r'(date|time|timestamp|dob)$', col_clean))
+                is_parse_date = (
+                    pd.to_datetime(sample.iloc[:100], format='mixed', errors='coerce').notna().mean() >= 0.70
+                    if not sample.empty else False
+                )
+                if is_name_date or is_parse_date:
+                    date_cols.append((col, n_unique))
+                    logger.info("Datetime column identified: '%s' (%d unique timestamps)", col, n_unique)
+                    continue
+
+                # Check if it's PII (name, email, phone, etc.)
+                is_pii = bool(re.search(r'(name|fullname|firstname|lastname|email|phone|address|ssn)$', col_clean))
+                if is_pii:
+                    pii_cols.append((col, n_unique))
+                    logger.warning("PII column detected: '%s' (%d unique values)", col, n_unique)
+                    continue
+
+                if n_unique > threshold:
+                    generic_high_card.append((col, n_unique))
                     logger.warning("High cardinality column '%s': %d unique values", col, n_unique)
 
-            if self.high_cardinality_cols:
+            if pii_cols:
+                self.warnings.append({
+                    "Check": "PII Detection",
+                    "Status": "WARN",
+                    "Details": f"Columns {pii_cols} appear to contain Personally Identifiable Information (PII).",
+                    "Fix": "Drop PII columns to protect user privacy and prevent overfitting."
+                })
+
+            if date_cols:
+                self.warnings.append({
+                    "Check": "Datetime Features",
+                    "Status": "INFO",
+                    "Details": f"Columns {date_cols} are datetime series rather than plain categoricals.",
+                    "Fix": "Extract datetime features (year, month, day, dayofweek) via pipeline's data_time parameter."
+                })
+
+            if generic_high_card:
                 self.warnings.append({
                     "Check": "High Cardinality",
                     "Status": "WARN",
-                    "Details": f"Categorical columns {self.high_cardinality_cols} have > {threshold} unique categories.",
+                    "Details": f"Categorical columns {generic_high_card} have > {threshold} unique categories.",
                     "Fix": "Use Target/Frequency Encoding or group rare categories."
                 })
+
+            self.high_cardinality_cols = pii_cols + generic_high_card
             return self.high_cardinality_cols
         except Exception as e:
             logger.error("Error in check_cardinality: %s", e)
