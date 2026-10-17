@@ -183,6 +183,17 @@ class ModelDeployer:
             for c in clean_df.columns
         ]
 
+        # 1b. Expand date_col into sub-features (mirrors pipeline.transform) so users
+        #     can pass e.g. signup_date instead of signup_date_year/month/day/dayofweek.
+        date_col = getattr(self.pipeline, "date_col", None) if self.pipeline else None
+        if date_col and date_col in clean_df.columns:
+            dt = pd.to_datetime(clean_df[date_col], format='mixed', errors='coerce')
+            clean_df[f'{date_col}_year'] = dt.dt.year
+            clean_df[f'{date_col}_month'] = dt.dt.month
+            clean_df[f'{date_col}_day'] = dt.dt.day
+            clean_df[f'{date_col}_dayofweek'] = dt.dt.dayofweek
+            clean_df = clean_df.drop(columns=[date_col])
+
         # 2. Strict mode validation checks before coercion/imputation
         if strict and self.pipeline is not None:
             problems = []
@@ -227,13 +238,14 @@ class ModelDeployer:
                 raise ValueError("Strict deployment error: " + "; ".join(problems))
 
         # 3. Handle numerical missing columns and currency parsing
-        date_col = getattr(self.pipeline, "date_col", None)
+        # Note: date_col sub-features were already expanded above; the source date col is gone.
         generated_date_cols = {f"{date_col}_year", f"{date_col}_month", f"{date_col}_day", f"{date_col}_dayofweek"} if date_col else set()
 
         if hasattr(self.pipeline, "num_fill") and self.pipeline.num_fill:
             for num_col, fill_val in self.pipeline.num_fill.items():
                 if num_col not in clean_df.columns:
-                    if date_col and date_col in clean_df.columns and num_col in generated_date_cols:
+                    if num_col in generated_date_cols:
+                        # Already expanded from date_col above; skip imputation
                         continue
                     clean_df[num_col] = fill_val
                     logger.info("Missing numerical feature '%s' imputed with training baseline: %s", num_col, fill_val)
@@ -242,6 +254,7 @@ class ModelDeployer:
                     if col_vals.dtype == object or str(col_vals.dtype).startswith('str'):
                         stripped = col_vals.astype(str).str.replace(r'[\$,]', '', regex=True).str.strip()
                         clean_df[num_col] = pd.to_numeric(stripped, errors='coerce').fillna(fill_val)
+
 
         # 4. Handle categorical missing columns
         if hasattr(self.pipeline, "cat_fill") and self.pipeline.cat_fill:

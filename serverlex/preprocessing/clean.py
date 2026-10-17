@@ -162,6 +162,19 @@ class Clean:
         self.separate()
         return self.data
 
+    def drop_embedded_headers(self):
+        """Remove rows that are copies of the header (e.g. from CSV concatenation)."""
+        self.load()
+        # A row is an embedded header if it matches ≥ half of column names exactly
+        min_match = max(2, len(self.data.columns) // 2)
+        mask = (self.data == self.data.columns).sum(axis=1) >= min_match
+        if mask.any():
+            n = int(mask.sum())
+            logger.warning("Dropping %d embedded header row(s) found in data", n)
+            self.data = self.data[~mask].reset_index(drop=True)
+        self.separate()
+        return self.data
+
     def delete_duplicates(self):
         self.load()
         self.data = self.data.drop_duplicates()
@@ -270,6 +283,9 @@ class Clean:
     ):
         # 1. Load data
         self.load()
+
+        # 1a. Strip embedded header rows (e.g. from CSV concatenation) BEFORE column rename
+        self.drop_embedded_headers()
 
         # 2. Standardize column names
         self.clean_column_names()

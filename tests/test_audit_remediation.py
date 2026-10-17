@@ -249,3 +249,52 @@ def test_deployer_hmac_missing_key_clear_error(tmp_path):
     with pytest.raises(ValueError, match="saved with HMAC authenticity protection"):
         ModelDeployer.load(bundle_path)
 
+
+def test_clean_drops_embedded_header_rows():
+    """1.2.3 Regression: Embedded duplicate header rows from CSV concatenation are dropped."""
+    df = pd.DataFrame({
+        "age": ["25", "30", "age", "45"],
+        "fee": ["100", "200", "fee", "300"],
+        "plan": ["basic", "standard", "plan", "premium"]
+    })
+    cleaner = Clean(df)
+    cleaner.drop_embedded_headers()
+    assert len(cleaner.data) == 3
+    assert "age" not in cleaner.data["age"].values
+
+
+def test_pipeline_auto_coerces_numeric_strings_and_serving(tmp_path):
+    """1.2.3 Regression: Columns with units/symbols (9.6 GB, 0,0) are auto-coerced to numeric and deploy cleanly."""
+    df = pd.DataFrame({
+        "signup_date": ["2024-01-01", "2024-02-01", "2024-03-01", "2024-04-01"] * 10,
+        "usage_gb": ["6.5", "9.6 GB", "0,0", "12.2"] * 10,
+        "fee_per_gb": ["45.5", "50.0", "10.2", "88.1"] * 10,
+        "auto_renew": ["0", "1", "0", "1"] * 10,
+        "churn": [0, 1, 0, 1] * 10
+    })
+    pipeline = MLPipeline()
+    pipeline.fit(df, target="churn", data_time=["signup_date"], encode="onehot", scale="standard")
+
+    # usage_gb and fee_per_gb should be numeric, not one-hot encoded
+    assert "usage_gb" in pipeline.num_fill
+    assert "fee_per_gb" in pipeline.num_fill
+    assert "usage_gb" not in pipeline.cat_categories
+
+    X, y = pipeline.transform(df)
+    assert X.shape[1] < 15  # not blown up into dozens of categories
+
+    model = RandomForestClassifier(n_estimators=10, random_state=42).fit(X, y)
+    deployer = ModelDeployer(pipeline=pipeline, model=model)
+    bundle_file = str(tmp_path / "auto_bundle.joblib")
+    deployer.save(bundle_file)
+
+    loaded = ModelDeployer.load(bundle_file)
+    sample = {
+        "signup_date": "2024-05-01",
+        "usage_gb": 10.5,
+        "fee_per_gb": 47.92,
+        "auto_renew": 1
+    }
+    pred = loaded.predict(sample, strict=True)
+    assert len(pred) == 1
+

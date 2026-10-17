@@ -1,4 +1,5 @@
 import logging
+import re
 import pandas as pd
 import numpy as np
 from serverlex.preprocessing.clean import Clean
@@ -71,6 +72,34 @@ class MLPipeline:
             self.numeric_string_cols=[c.strip().lower().replace(' ', '_') for c in (numeric_string_cols or [])]
 
             logger.info("Fitting pipeline on %d rows (target=%s, encode=%s, scale=%s)", len(self.data), self.target, self.encode, self.scale)
+
+            # 0. Auto-detect object columns that are predominantly numeric (≥70% parseable).
+            #    This handles columns read as strings from dirty CSVs (e.g. "9.6 GB", "0,0")
+            #    so they are coerced to numeric rather than one-hot encoded as categoricals.
+            _UNIT_PAT = r'(?i)\s*(gb|mb|kb|yrs?|%)\s*$'
+            _SYM_PAT = r'[₹\$,/\s]'
+            _auto_numeric = set(numeric_string_cols or [])
+            for col in self.data.select_dtypes(include=['object', 'string']).columns:
+                if self.target and col.strip().lower() == self.target:
+                    continue
+                sample = self.data[col].dropna().astype(str).str.strip()
+                if sample.empty or len(sample) < 5:
+                    continue
+                cleaned_sample = (
+                    sample
+                    .str.replace(_UNIT_PAT, '', regex=True)
+                    .str.replace(_SYM_PAT, '', regex=True)
+                    .str.replace(',', '.', regex=False)
+                    .str.strip()
+                )
+                parse_rate = pd.to_numeric(cleaned_sample, errors='coerce').notna().mean()
+                if parse_rate >= 0.70:
+                    _auto_numeric.add(col)
+            if _auto_numeric:
+                extra = sorted(_auto_numeric - set(numeric_string_cols or []))
+                if extra:
+                    logger.info("Auto-detected numeric-majority string columns (will coerce): %s", extra)
+            numeric_string_cols = list(_auto_numeric) if _auto_numeric else numeric_string_cols
 
             # 1. Clean the training data using your Clean class with target protection
             clean_kwargs = kwargs.copy()
@@ -191,8 +220,23 @@ class MLPipeline:
             if hasattr(self, 'numeric_string_cols') and self.numeric_string_cols:
                 for col in self.numeric_string_cols:
                     if col in out.columns:
-                        cleaned=out[col].astype(str).str.replace(r'[\$,]', '', regex=True).str.strip()
+                        cleaned=out[col].astype(str).str.replace(r'[₹\$,/]', '', regex=True).str.replace(r'(?i)\s*(gb|mb|kb|yrs?|%)\s*$', '', regex=True).str.replace(',', '.', regex=False).str.strip()
                         out[col]=pd.to_numeric(cleaned, errors='coerce')
+
+            # Also coerce any num_fill column that is still string/object dtype
+            # (handles auto-detected columns stored after column name cleaning)
+            _UNIT_PAT2 = r'(?i)\s*(gb|mb|kb|yrs?|%)\s*$'
+            _SYM_PAT2 = r'[₹\$,/]'
+            for col in list(self.num_fill.keys()):
+                if col in out.columns and (out[col].dtype == object or str(out[col].dtype).startswith('str')):
+                    cleaned = (
+                        out[col].astype(str)
+                        .str.replace(_UNIT_PAT2, '', regex=True)
+                        .str.replace(_SYM_PAT2, '', regex=True)
+                        .str.replace(',', '.', regex=False)
+                        .str.strip()
+                    )
+                    out[col] = pd.to_numeric(cleaned, errors='coerce')
 
             # 2. Extract datetime features using saved date_col
             if self.date_col and self.date_col in out.columns:
