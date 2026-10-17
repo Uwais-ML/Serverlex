@@ -2,7 +2,7 @@ import logging
 import matplotlib.pyplot as plt
 import pandas as pd
 import numpy as np
-from Clean import Clean
+from serverlex.preprocessing.clean import Clean
 
 logger=logging.getLogger("Visualization")
 if not logger.handlers:

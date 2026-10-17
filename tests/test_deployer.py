@@ -23,7 +23,7 @@ def trained_bundle(tmp_path):
 
     bundle_path = str(tmp_path / "bundle.joblib")
     deployer = ModelDeployer(pipeline=pipe, model=model)
-    deployer.save(bundle_path)
+    deployer.save(bundle_path, compute_hash=True)
     return bundle_path
 
 
@@ -54,23 +54,39 @@ def test_deployer_single_record_prediction(trained_bundle):
 
 
 def test_deployer_schema_resilience(trained_bundle):
-    """
-    Tests that missing keys in production payload are auto-imputed from training baselines,
-    rogue unmodeled keys are filtered, and string numbers are coerced.
-    """
     deployer = ModelDeployer.load(trained_bundle)
 
     # Payload with missing 'income', rogue key 'device_ip', and string 'age'
     faulty_payload = {
-        "age": "32",  # String number needing coercion
+        "age": "32",
         "city": "Chicago",
-        "device_ip": "192.168.1.1"  # Rogue key not in training
-        # 'income' is omitted intentionally
+        "device_ip": "192.168.1.1"
     }
 
     pred = deployer.predict(faulty_payload)
     assert len(pred) == 1
     assert pred[0] in [0, 1]
+
+
+def test_deployer_strict_mode(trained_bundle):
+    deployer = ModelDeployer.load(trained_bundle)
+    # Missing 'city' in strict mode must raise ValueError
+    incomplete_payload = {"age": 30.0, "income": 50000.0}
+    with pytest.raises(ValueError, match="Strict deployment error"):
+        deployer.predict(incomplete_payload, strict=True)
+
+
+def test_deployer_bundle_integrity(trained_bundle):
+    # Load with verify_hash=True must succeed on untampered bundle
+    d = ModelDeployer.load(trained_bundle, verify_hash=True)
+    assert d.pipeline is not None
+
+    # Tampering with file must fail integrity verification
+    with open(trained_bundle, "ab") as f:
+        f.write(b"tamper_bytes")
+
+    with pytest.raises(ValueError, match="integrity verification failed"):
+        ModelDeployer.load(trained_bundle, verify_hash=True)
 
 
 def test_deployer_batch_prediction(trained_bundle):

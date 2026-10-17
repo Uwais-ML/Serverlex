@@ -59,3 +59,22 @@ def test_no_drift_when_distributions_match():
     row = report.iloc[0]
     assert row["Drift_Detected"] is False or row["Drift_Detected"] == False
     assert row["PSI"] < 0.1
+
+
+def test_missing_column_alert_in_drift():
+    ref_df = pd.DataFrame({
+        "feature_1": [1, 2, 3],
+        "feature_2": [4, 5, 6]
+    })
+    # Production missing feature_2 entirely
+    prod_df = pd.DataFrame({
+        "feature_1": [1, 2, 3]
+    })
+
+    detector = DriftDetector(ref_df)
+    report = detector.detect_drift(prod_df)
+
+    assert "feature_2" in report["Feature"].values
+    f2_row = report.loc[report["Feature"] == "feature_2"].iloc[0]
+    assert f2_row["Type"] == "Missing Feature"
+    assert bool(f2_row["Drift_Detected"]) is True

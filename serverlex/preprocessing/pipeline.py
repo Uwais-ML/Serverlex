@@ -1,7 +1,7 @@
 import logging
 import pandas as pd
 import numpy as np
-from Clean import Clean
+from serverlex.preprocessing.clean import Clean
 
 from sklearn.model_selection import cross_val_score, KFold, StratifiedKFold
 from sklearn.linear_model import LogisticRegression, Ridge
@@ -24,10 +24,17 @@ class MLPipeline:
         self.feature_columns=[]
         self.num_fill={}
         self.cat_fill={}
+        self.cat_categories={}
         self.scaler_mean={}
         self.scaler_std={}
+        self.scaler_min={}
+        self.scaler_max={}
+        self.scaler_median={}
+        self.scaler_iqr={}
         self.date_col=None
         self.custom_models={}
+        self.X_train=None
+        self.y_train=None
 
         if data is not None:
             self.load_data(data)
@@ -41,16 +48,22 @@ class MLPipeline:
             self.cleaner=data
             self.data=self.cleaner.data
         elif isinstance(data, pd.DataFrame):
-            self.cleaner=Clean.__new__(Clean)
-            self.cleaner.data=data.copy()
-            self.cleaner.path=None
-            self.data=data
+            self.cleaner=Clean(data)
+            self.data=self.cleaner.data
 
     # ==========================
     # 1. FIT (Learn & Save on self)
     # ==========================
     def fit(self, df, target=None, encode='onehot', scale='standard', data_time=None, numeric_string_cols=None, **kwargs):
         try:
+            valid_scales = ['standard', 'minmax', 'robust', None]
+            if scale not in valid_scales:
+                raise ValueError(f"Invalid scale method '{scale}'. Supported options: {valid_scales}")
+
+            valid_encodes = ['onehot', 'label', None]
+            if encode not in valid_encodes:
+                raise ValueError(f"Invalid encode method '{encode}'. Supported options: {valid_encodes}")
+
             self.load_data(df)
             self.target=target.strip().lower() if target else None
             self.encode=encode
@@ -82,41 +95,66 @@ class MLPipeline:
             # 3. Memorize missing value fill values directly on self
             for col in self.cleaner.numerical_columns.columns:
                 if col != self.target:
-                    self.num_fill[col]=self.data[col].mean()
+                    self.num_fill[col]=float(self.data[col].mean()) if not self.data[col].dropna().empty else 0.0
 
             for col in self.cleaner.categrorical_columns.columns:
                 if col != self.target:
-                    mode_val=self.data[col].mode()
-                    self.cat_fill[col]=mode_val[0] if not mode_val.empty else 'unknown'
+                    cleaned_series = self.data[col].dropna().astype(str).str.lower().str.replace(' ', '')
+                    mode_val = cleaned_series.mode()
+                    self.cat_fill[col] = mode_val[0] if not mode_val.empty else 'unknown'
 
-            # 4. Encode categoricals to find final feature columns
+            # 4. Encode categoricals and memorize exact categories
             train_X=self.data.copy()
             if self.target and self.target in train_X.columns:
                 train_X=train_X.drop(columns=[self.target])
 
             cat_cols=[c for c in self.cleaner.categrorical_columns.columns if c != self.target and c in train_X.columns]
+            self.cat_categories = {}
+            for col in cat_cols:
+                # Fill missing before string casting (Bug 3 fix)
+                train_X[col] = train_X[col].fillna(self.cat_fill[col]).astype(str).str.lower().str.replace(' ', '')
+                cats = sorted(list(train_X[col].unique()))
+                self.cat_categories[col] = cats
+                train_X[col] = pd.Categorical(train_X[col], categories=cats)
+
             if self.encode=='onehot' and cat_cols:
                 train_X=pd.get_dummies(train_X, columns=cat_cols, drop_first=True, dtype=int)
             elif self.encode=='label' and cat_cols:
                 for col in cat_cols:
-                    train_X[col]=train_X[col].astype('category').cat.codes
+                    train_X[col]=train_X[col].cat.codes
 
             # Save exact list of final columns for future test data
             self.feature_columns=train_X.columns.tolist()
 
             # 5. Memorize scaling numbers on self
+            num_cols_to_scale = [c for c in self.cleaner.numerical_columns.columns if c in self.feature_columns]
             if self.scale=='standard':
-                for col in self.cleaner.numerical_columns.columns:
-                    if col in self.feature_columns:
-                        self.scaler_mean[col]=train_X[col].mean()
-                        std_val=train_X[col].std()
-                        self.scaler_std[col]=std_val if std_val != 0 else 1.0
+                for col in num_cols_to_scale:
+                    self.scaler_mean[col]=float(train_X[col].mean())
+                    std_val=float(train_X[col].std())
+                    self.scaler_std[col]=std_val if std_val != 0 else 1.0
+
+            elif self.scale=='minmax':
+                for col in num_cols_to_scale:
+                    min_val = float(train_X[col].min())
+                    max_val = float(train_X[col].max())
+                    self.scaler_min[col] = min_val
+                    self.scaler_max[col] = max_val if max_val != min_val else min_val + 1.0
+
+            elif self.scale=='robust':
+                for col in num_cols_to_scale:
+                    median_val = float(train_X[col].median())
+                    q75 = float(train_X[col].quantile(0.75))
+                    q25 = float(train_X[col].quantile(0.25))
+                    iqr = q75 - q25
+                    self.scaler_median[col] = median_val
+                    self.scaler_iqr[col] = iqr if iqr != 0 else 1.0
 
             logger.info("Fit complete. Feature count: %d", len(self.feature_columns))
             return self
         except Exception as e:
             logger.error("Error during fit: %s", e)
-            return self
+            raise
 
     # ==========================
     # 2. TRANSFORM (Uses self variables)
@@ -129,10 +167,10 @@ class MLPipeline:
             out.columns=out.columns.str.strip().str.lower().str.replace(' ', '_').str.replace(r'[^\w_]', '', regex=True)
 
             # Clean numeric string columns using saved self.numeric_string_cols
-            if hasattr(self, 'numeric_string_cols'):
+            if hasattr(self, 'numeric_string_cols') and self.numeric_string_cols:
                 for col in self.numeric_string_cols:
                     if col in out.columns:
-                        cleaned=out[col].astype(str).str.replace(r'[\$,]', '', regex=True)
+                        cleaned=out[col].astype(str).str.replace(r'[\$,]', '', regex=True).str.strip()
                         out[col]=pd.to_numeric(cleaned, errors='coerce')
 
             # 2. Extract datetime features using saved date_col
@@ -151,36 +189,52 @@ class MLPipeline:
 
             for col, val in self.cat_fill.items():
                 if col in out.columns:
-                    out[col]=out[col].astype(str).str.lower().str.replace(' ', '')
+                    # Fill NA before converting to string (Bug 3 fix)
                     out[col]=out[col].fillna(val)
+                    out[col]=out[col].astype(str).str.lower().str.replace(' ', '')
 
             # 4. Check target
             has_target=self.target and self.target in out.columns
             target_series=out[self.target] if has_target else None
 
-            # 5. Encode categoricals
-            cat_cols=[c for c in self.cat_fill.keys() if c in out.columns]
-            if self.encode=='onehot' and cat_cols:
-                out=pd.get_dummies(out, columns=cat_cols, drop_first=True, dtype=int)
-            elif self.encode=='label' and cat_cols:
+            # 5. Encode categoricals using strictly memorized categories (Bug 1 fix)
+            cat_cols=[c for c in self.cat_categories.keys() if c in out.columns]
+            if cat_cols:
                 for col in cat_cols:
-                    out[col]=out[col].astype('category').cat.codes
+                    # Map novel categories to NaN so they drop/zero cleanly
+                    mask = out[col].isin(self.cat_categories[col])
+                    out.loc[~mask, col] = np.nan
+                    out[col] = pd.Categorical(out[col], categories=self.cat_categories[col])
+
+                if self.encode=='onehot':
+                    out=pd.get_dummies(out, columns=cat_cols, drop_first=True, dtype=int)
+                elif self.encode=='label':
+                    for col in cat_cols:
+                        out[col]=out[col].cat.codes
 
             # 6. Reindex columns so test columns match self.feature_columns exactly
             X=out.reindex(columns=self.feature_columns, fill_value=0)
 
-            # 7. Scale using memorized self.scaler_mean and self.scaler_std
+            # 7. Scale using memorized statistics
             if self.scale=='standard':
                 for col in self.scaler_mean.keys():
                     if col in X.columns:
                         X[col]=(X[col] - self.scaler_mean[col]) / self.scaler_std[col]
+            elif self.scale=='minmax':
+                for col in self.scaler_min.keys():
+                    if col in X.columns:
+                        X[col]=(X[col] - self.scaler_min[col]) / (self.scaler_max[col] - self.scaler_min[col])
+            elif self.scale=='robust':
+                for col in self.scaler_median.keys():
+                    if col in X.columns:
+                        X[col]=(X[col] - self.scaler_median[col]) / self.scaler_iqr[col]
 
             if has_target:
                 return X, target_series
             return X
         except Exception as e:
             logger.error("Error during transform: %s", e)
-            return df
+            raise
 
     def fit_transform(self, df, **kwargs):
         self.fit(df, **kwargs)
@@ -211,7 +265,13 @@ class MLPipeline:
             if not isinstance(y, pd.Series):
                 y=pd.Series(y)
 
-            is_classification=y.dtype=='object' or str(y.dtype).startswith('cat') or y.nunique() <= 20
+            # Trustworthy classification detection: check dtype or integer discrete
+            is_classification = (
+                y.dtype == 'object'
+                or str(y.dtype).startswith('cat')
+                or str(y.dtype).startswith('bool')
+                or (pd.api.types.is_integer_dtype(y) and y.nunique() <= 20)
+            )
             task="Classification" if is_classification else "Regression"
 
             results=[]
@@ -225,17 +285,17 @@ class MLPipeline:
                     "Gradient Boosting": GradientBoostingClassifier(random_state=42)
                 }
                 models.update(self.custom_models)
+
                 logger.info("Evaluating %d baseline models (task=%s, cv=%d)", len(models), task, cv)
 
                 for name, model in models.items():
-                    try:
-                        acc=cross_val_score(model, X, y, cv=kf, scoring="accuracy")
-                        f1=cross_val_score(model, X, y, cv=kf, scoring="f1_weighted")
-                        results.append({"Model": name, "Accuracy": round(acc.mean(), 4), "F1": round(f1.mean(), 4)})
-                    except Exception as e:
-                        results.append({"Model": name, "Accuracy": None, "F1": str(e)})
-
-                leaderboard=pd.DataFrame(results).sort_values(by="Accuracy", ascending=False)
+                    acc_scores=cross_val_score(model, X, y, cv=kf, scoring='accuracy')
+                    f1_scores=cross_val_score(model, X, y, cv=kf, scoring='f1_weighted')
+                    results.append({
+                        "Model": name,
+                        "Accuracy": round(float(acc_scores.mean()), 4),
+                        "F1": round(float(f1_scores.mean()), 4)
+                    })
             else:
                 kf=KFold(n_splits=cv, shuffle=True, random_state=42)
                 models={
@@ -245,19 +305,21 @@ class MLPipeline:
                     "Gradient Boosting": GradientBoostingRegressor(random_state=42)
                 }
                 models.update(self.custom_models)
+
                 logger.info("Evaluating %d baseline models (task=%s, cv=%d)", len(models), task, cv)
 
                 for name, model in models.items():
-                    try:
-                        r2=cross_val_score(model, X, y, cv=kf, scoring="r2")
-                        rmse=cross_val_score(model, X, y, cv=kf, scoring="neg_root_mean_squared_error")
-                        results.append({"Model": name, "R2": round(r2.mean(), 4), "RMSE": round(-rmse.mean(), 4)})
-                    except Exception as e:
-                        results.append({"Model": name, "R2": None, "RMSE": str(e)})
+                    r2_scores=cross_val_score(model, X, y, cv=kf, scoring='r2')
+                    rmse_scores=-cross_val_score(model, X, y, cv=kf, scoring='neg_root_mean_squared_error')
+                    results.append({
+                        "Model": name,
+                        "R2": round(float(r2_scores.mean()), 4),
+                        "RMSE": round(float(rmse_scores.mean()), 4)
+                    })
 
-                leaderboard=pd.DataFrame(results).sort_values(by="R2", ascending=False)
-
-            logger.info("Baseline leaderboard:\n%s", leaderboard.to_string(index=False))
-            return leaderboard
+            res_df=pd.DataFrame(results).sort_values(by=list(results[0].keys())[1], ascending=False)
+            logger.info("Baseline leaderboard:\n%s", res_df.to_string(index=False))
+            return res_df
         except Exception as e:
-            logger.error("Error in evaluate_baseline_models: %s", e)
+            logger.error("Error evaluating models: %s", e)
+            raise

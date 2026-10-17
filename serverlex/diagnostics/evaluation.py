@@ -65,17 +65,36 @@ class ModelEvaluator:
 
     def plot_roc_curve(self, y_true, y_prob, title="ROC Curve"):
         try:
-            fpr, tpr, _ = roc_curve(y_true, y_prob)
-            roc_auc=auc(fpr, tpr)
+            y_true_arr = np.asarray(y_true)
+            y_prob_arr = np.asarray(y_prob)
 
-            fig, ax=plt.subplots(figsize=(6, 5))
-            ax.plot(fpr, tpr, color="darkorange", lw=2, label=f"ROC (AUC = {roc_auc:.4f})")
-            ax.plot([0, 1], [0, 1], color="navy", lw=1.5, linestyle="--")
+            fig, ax = plt.subplots(figsize=(6, 5))
+
+            if y_prob_arr.ndim > 1 and y_prob_arr.shape[1] > 2:
+                from sklearn.preprocessing import label_binarize
+                classes = np.unique(y_true_arr)
+                y_bin = label_binarize(y_true_arr, classes=classes)
+                auc_scores = []
+                for idx, cls_name in enumerate(classes):
+                    fpr, tpr, _ = roc_curve(y_bin[:, idx], y_prob_arr[:, idx])
+                    score = float(auc(fpr, tpr))
+                    auc_scores.append(score)
+                    ax.plot(fpr, tpr, lw=1.5, label=f"Class {cls_name} (AUC={score:.3f})")
+                roc_auc = float(np.mean(auc_scores))
+                ax.plot([0, 1], [0, 1], color="navy", lw=1.5, linestyle="--")
+                ax.set_title(f"{title} (Macro Avg AUC = {roc_auc:.4f})", fontsize=12, fontweight="bold")
+            else:
+                prob_vec = y_prob_arr[:, 1] if (y_prob_arr.ndim > 1 and y_prob_arr.shape[1] == 2) else y_prob_arr
+                fpr, tpr, _ = roc_curve(y_true_arr, prob_vec)
+                roc_auc = float(auc(fpr, tpr))
+                ax.plot(fpr, tpr, color="darkorange", lw=2, label=f"ROC (AUC = {roc_auc:.4f})")
+                ax.plot([0, 1], [0, 1], color="navy", lw=1.5, linestyle="--")
+                ax.set_title(title, fontsize=12, fontweight="bold")
+
             ax.set_xlim([0.0, 1.0])
             ax.set_ylim([0.0, 1.05])
             ax.set_xlabel("False Positive Rate")
             ax.set_ylabel("True Positive Rate")
-            ax.set_title(title, fontsize=12, fontweight="bold")
             ax.legend(loc="lower right")
             ax.grid(True, linestyle="--", alpha=0.5)
             plt.tight_layout()
@@ -84,6 +103,7 @@ class ModelEvaluator:
             return roc_auc
         except Exception as e:
             logger.error("Error in plot_roc_curve: %s", e)
+            raise
 
     def plot_precision_recall(self, y_true, y_prob, title="Precision-Recall Curve"):
         try:

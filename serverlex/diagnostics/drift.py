@@ -17,10 +17,11 @@ class DriftDetector:
     - Univariate Statistical Testing: 2-sample Kolmogorov-Smirnov & Chi-Square Contingency.
     - Population Stability Index (PSI): Industry-standard binned population shift metric.
     - Wasserstein Distance: Earth Mover's Distance for continuous geometric distribution shift.
-    - Multivariate Drift Summary: Aggregate drift metrics across all incoming production features.
+    - Missing Feature Audit: Explicitly alerts on columns dropped in production instead of silently skipping them.
+    - Balanced Triggering: Avoids false alarms from hypersensitive p-values by combining p-value with PSI thresholds.
     """
 
-    def __init__(self, reference_data, alpha=0.05, psi_threshold=0.2):
+    def __init__(self, reference_data, alpha=0.01, psi_threshold=0.2):
         self.ref_data=reference_data.copy() if isinstance(reference_data, pd.DataFrame) else pd.DataFrame(reference_data)
         self.alpha=alpha
         self.psi_threshold=psi_threshold
@@ -28,12 +29,6 @@ class DriftDetector:
 
     @staticmethod
     def calculate_psi(expected, actual, num_bins=10):
-        """
-        Calculates Population Stability Index (PSI) between reference and production distributions.
-        PSI < 0.1: No significant change
-        0.1 <= PSI < 0.25: Moderate shift
-        PSI >= 0.25: Significant population drift
-        """
         try:
             expected = np.asarray(expected, dtype=float)
             actual = np.asarray(actual, dtype=float)
@@ -43,7 +38,6 @@ class DriftDetector:
             if len(expected) < 10 or len(actual) < 10:
                 return 0.0
 
-            # Quantile bins from reference data
             quantiles = np.linspace(0, 100, num_bins + 1)
             bins = np.percentile(expected, quantiles)
             bins[0] = -np.inf
@@ -56,7 +50,6 @@ class DriftDetector:
             expected_counts, _ = np.histogram(expected, bins=bins)
             actual_counts, _ = np.histogram(actual, bins=bins)
 
-            # Smooth zero counts
             expected_pct = np.where(expected_counts == 0, 0.0001, expected_counts) / len(expected)
             actual_pct = np.where(actual_counts == 0, 0.0001, actual_counts) / len(actual)
 
@@ -71,11 +64,30 @@ class DriftDetector:
             self.drift_results=[]
             drift_count=0
 
-            common_cols=[c for c in self.ref_data.columns if c in cur_data.columns]
-            logger.info("Running drift detection across %d features (alpha=%.3f, psi_threshold=%.2f)", len(common_cols), self.alpha, self.psi_threshold)
+            ref_cols = list(self.ref_data.columns)
+            cur_cols = list(cur_data.columns)
+
+            # 1. Audit Missing Columns
+            missing_in_prod = [c for c in ref_cols if c not in cur_cols]
+            for col in missing_in_prod:
+                drift_count += 1
+                logger.error("Missing feature in production data: '%s'", col)
+                self.drift_results.append({
+                    "Feature": col,
+                    "Type": "Missing Feature",
+                    "Statistic": None,
+                    "P_Value": None,
+                    "PSI": 1.0,
+                    "Wasserstein": None,
+                    "Drift_Detected": True,
+                    "Severity": "Critical (Missing)"
+                })
+
+            common_cols = [c for c in ref_cols if c in cur_cols]
+            logger.info("Running drift detection across %d features (alpha=%.3f, psi_threshold=%.2f)", len(ref_cols), self.alpha, self.psi_threshold)
 
             for col in common_cols:
-                # 1. Numerical Drift (KS test, PSI, and Wasserstein distance)
+                # 2. Numerical Drift
                 if pd.api.types.is_numeric_dtype(self.ref_data[col]):
                     ref_vals=self.ref_data[col].dropna()
                     cur_vals=cur_data[col].dropna()
@@ -85,10 +97,19 @@ class DriftDetector:
                         psi = self.calculate_psi(ref_vals, cur_vals)
                         w_dist = float(np.round(wasserstein_distance(ref_vals, cur_vals), 4))
 
-                        is_drift = (p_val < self.alpha) or (psi >= self.psi_threshold)
+                        # Avoid false positives: require practical shift (PSI >= threshold) OR severe shift
+                        is_drift = (psi >= self.psi_threshold) or (p_val < self.alpha and psi >= 0.10)
+                        
+                        if psi >= 0.25:
+                            severity = "High"
+                        elif psi >= 0.10:
+                            severity = "Moderate"
+                        else:
+                            severity = "None"
+
                         if is_drift:
                             drift_count += 1
-                            logger.warning("Data drift detected in '%s' (KS=%.4f, p=%.5f, PSI=%.4f, Wasserstein=%.4f)", col, stat, p_val, psi, w_dist)
+                            logger.warning("Data drift detected in '%s' (KS=%.4f, p=%.5f, PSI=%.4f, Wasserstein=%.4f, Severity=%s)", col, stat, p_val, psi, w_dist, severity)
 
                         self.drift_results.append({
                             "Feature": col,
@@ -97,10 +118,11 @@ class DriftDetector:
                             "P_Value": round(p_val, 5),
                             "PSI": psi,
                             "Wasserstein": w_dist,
-                            "Drift_Detected": is_drift
+                            "Drift_Detected": is_drift,
+                            "Severity": severity
                         })
 
-                # 2. Categorical Drift (Chi-Square test & Population Stability Index)
+                # 3. Categorical Drift
                 else:
                     ref_counts=self.ref_data[col].astype(str).value_counts()
                     cur_counts=cur_data[col].astype(str).value_counts()
@@ -121,10 +143,12 @@ class DriftDetector:
                     cur_pct = np.where(cur_aligned == 0, 0.0001, cur_aligned) / cur_aligned.sum()
                     cat_psi = float(np.round(np.sum((cur_pct - ref_pct) * np.log(cur_pct / ref_pct)), 4))
 
-                    is_drift = (p_val < self.alpha) or (cat_psi >= self.psi_threshold)
+                    is_drift = (cat_psi >= self.psi_threshold) or (p_val < self.alpha and cat_psi >= 0.10)
+                    severity = "High" if cat_psi >= 0.25 else ("Moderate" if cat_psi >= 0.10 else "None")
+
                     if is_drift:
                         drift_count += 1
-                        logger.warning("Categorical shift detected in '%s' (Chi2=%.4f, p=%.5f, PSI=%.4f)", col, stat, p_val, cat_psi)
+                        logger.warning("Categorical shift detected in '%s' (Chi2=%.4f, p=%.5f, PSI=%.4f, Severity=%s)", col, stat, p_val, cat_psi, severity)
 
                     self.drift_results.append({
                         "Feature": col,
@@ -133,12 +157,13 @@ class DriftDetector:
                         "P_Value": round(p_val, 5),
                         "PSI": cat_psi,
                         "Wasserstein": None,
-                        "Drift_Detected": is_drift
+                        "Drift_Detected": is_drift,
+                        "Severity": severity
                     })
 
             report_df=pd.DataFrame(self.drift_results)
-            logger.info("Drift analysis complete: %d/%d features drifted", drift_count, len(common_cols))
+            logger.info("Drift analysis complete: %d/%d features drifted or missing", drift_count, len(ref_cols))
             return report_df
         except Exception as e:
             logger.error("Error in detect_drift: %s", e)
-            return pd.DataFrame()
+            raise
