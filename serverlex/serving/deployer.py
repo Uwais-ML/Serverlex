@@ -277,7 +277,7 @@ class ModelDeployer:
 
         return self._validate_and_sanitize(df, strict=strict)
 
-    def predict(self, raw_input, strict=False):
+    def predict(self, raw_input, strict=False, threshold=None):
         if self.pipeline is None or self.model is None:
             raise AttributeError("Pipeline and model must be loaded before calling predict().")
 
@@ -288,6 +288,12 @@ class ModelDeployer:
             X = transformed_res[0]
         else:
             X = transformed_res
+
+        # If a custom decision threshold is provided and model supports probabilities
+        if threshold is not None and hasattr(self.model, "predict_proba"):
+            proba = self.model.predict_proba(X)
+            if proba.ndim == 2 and proba.shape[1] >= 2:
+                return (proba[:, 1] >= threshold).astype(int)
 
         predictions = self.model.predict(X)
         return predictions

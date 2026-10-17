@@ -97,3 +97,17 @@ def test_deployer_batch_prediction(trained_bundle):
     ]
     preds = deployer.predict(batch)
     assert len(preds) == 2
+
+
+def test_deployer_custom_decision_threshold(trained_bundle):
+    deployer = ModelDeployer.load(trained_bundle)
+    sample = {"age": 30.0, "income": 50000.0, "city": "New York"}
+    proba = deployer.predict_proba(sample)[0][1]
+
+    # Extreme low threshold forces 1 (positive)
+    pred_low = deployer.predict(sample, threshold=0.0)
+    assert pred_low[0] == 1
+
+    # Extreme high threshold forces 0 (negative)
+    pred_high = deployer.predict(sample, threshold=1.0)
+    assert pred_high[0] == 0
