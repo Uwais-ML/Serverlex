@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "serverlex"
-version = "1.2.2"
+version = "1.2.3"
 description = "Production-Safe ML Preprocessing, Diagnostics, Tuning, and Serving Platform"
 readme = "README.md"
 authors = [{ name = "Serverlex Team" }]
