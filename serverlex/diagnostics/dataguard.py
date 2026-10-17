@@ -353,7 +353,10 @@ class DataGuard:
         remediation_summary = {
             "initial_columns": len(self.data.columns),
             "remaining_columns": len(df_clean.columns),
-            "dropped_columns": dropped_cols,
+            # Flat list of every dropped column name — iterable by callers
+            "dropped_columns": [c for cols in dropped_cols.values() for c in cols],
+            # Structured breakdown by category for callers that need it
+            "dropped_by_category": dropped_cols,
             "total_dropped": sum(len(v) for v in dropped_cols.values())
         }
         return df_clean, remediation_summary

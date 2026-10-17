@@ -62,7 +62,10 @@ class ModelExplainer:
         df = pd.DataFrame({
             "Feature": names,
             "Importance_Mean": res.importances_mean,
-            "Importance_Std": res.importances_std
+            "Importance_Std": res.importances_std,
+            # Documented column names in DOCUMENTATION.md (1.3.0)
+            "Permutation_Importance_Mean": res.importances_mean,
+            "Permutation_Importance_Std": res.importances_std,
         }).sort_values(by="Importance_Mean", ascending=False).reset_index(drop=True)
 
         return df

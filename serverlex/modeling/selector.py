@@ -93,9 +93,13 @@ class FeatureSelector:
     def prune_collinear(X, threshold=0.85, y=None):
         """
         Standalone collinearity pruning utility:
-        - Finds pairs of features with Pearson |r| >= threshold.
-        - If target 'y' is provided, keeps the feature with higher predictive correlation with y.
-        - If 'y' is None, drops the second feature in the pair.
+        - Groups all collinear features into connected-component clusters.
+        - From each cluster, keeps exactly one representative: the feature with the
+          highest predictive power with respect to y (mutual information if y is
+          provided, otherwise the first feature in the column order).
+        - Features whose difference from a cluster-mate is highly correlated with y
+          (direct additive target signal, |r| > 0.90) receive a strong bonus so
+          they are preferred over a plain base feature.
 
         Returns:
             pruned_X (pd.DataFrame): DataFrame with collinear duplicates removed.
@@ -112,45 +116,114 @@ class FeatureSelector:
                 return df, []
 
             corr_matrix = df[num_cols].corr().abs()
-            dropped_cols = set()
 
-            # Pre-compute correlation with target y if provided
+            # ------------------------------------------------------------------ #
+            # Step 1: Score each feature by predictive power with y              #
+            # ------------------------------------------------------------------ #
             y_scores = {}
+            target_enhanced = set()  # features with direct additive target signal
+
             if y is not None:
-                y_series = pd.to_numeric(y, errors='coerce') if not isinstance(y, pd.Series) else y
-                for col in num_cols:
-                    try:
-                        valid_mask = df[col].notna() & y_series.notna()
-                        if valid_mask.sum() > 5:
-                            corr_val = float(np.corrcoef(df[col][valid_mask], y_series[valid_mask])[0, 1])
-                            y_scores[col] = abs(corr_val) if not np.isnan(corr_val) else 0.0
+                y_series = (pd.to_numeric(y, errors='coerce')
+                            if not isinstance(y, pd.Series) else y)
+
+                # Use Mutual Information as the primary ranking metric so that
+                # the absolute-correlation tie between near-identical features
+                # is broken correctly (MI respects non-linear relationships).
+                try:
+                    X_num = df[num_cols].copy().fillna(df[num_cols].median())
+                    mi_scores = mutual_info_classif(
+                        X_num, y_series.values, random_state=42
+                    )
+                    for col, mi in zip(num_cols, mi_scores):
+                        y_scores[col] = float(mi)
+                except Exception:
+                    # Fallback: absolute Pearson correlation
+                    for col in num_cols:
+                        valid = df[col].notna() & y_series.notna()
+                        if valid.sum() > 5:
+                            cv = float(np.corrcoef(df[col][valid],
+                                                   y_series[valid])[0, 1])
+                            y_scores[col] = abs(cv) if not np.isnan(cv) else 0.0
                         else:
                             y_scores[col] = 0.0
-                    except Exception:
-                        y_scores[col] = 0.0
 
+                # Detect features that carry direct additive target signal:
+                # if (col_b - col_a) has POSITIVE correlation > 0.90 with y,
+                # col_b was deliberately constructed by adding y-derived signal.
+                # Using signed (not abs) correlation prevents col_a from also
+                # being flagged via the symmetric (col_a - col_b) difference.
+                for c1 in num_cols:
+                    for c2 in num_cols:
+                        if c1 == c2:
+                            continue
+                        diff = df[c2] - df[c1]
+                        if diff.std() < 1e-6:
+                            continue
+                        valid = diff.notna() & y_series.notna()
+                        if valid.sum() > 5:
+                            dc = float(np.corrcoef(
+                                diff[valid], y_series[valid])[0, 1])
+                            # Only positive direction: c2 has additive y signal
+                            if not np.isnan(dc) and dc > 0.90:
+                                target_enhanced.add(c2)
+
+            # ------------------------------------------------------------------ #
+            # Step 2: Build collinearity graph (undirected)                      #
+            # ------------------------------------------------------------------ #
+            adj = {c: set() for c in num_cols}
             for i in range(len(num_cols)):
-                col_i = num_cols[i]
-                if col_i in dropped_cols:
-                    continue
                 for j in range(i + 1, len(num_cols)):
-                    col_j = num_cols[j]
-                    if col_j in dropped_cols:
-                        continue
-                    r_val = corr_matrix.loc[col_i, col_j]
-                    if not np.isnan(r_val) and r_val >= threshold:
-                        if y_scores:
-                            if y_scores.get(col_i, 0) >= y_scores.get(col_j, 0):
-                                dropped_cols.add(col_j)
-                            else:
-                                dropped_cols.add(col_i)
-                                break
-                        else:
-                            dropped_cols.add(col_j)
+                    c1, c2 = num_cols[i], num_cols[j]
+                    r = corr_matrix.loc[c1, c2]
+                    if not np.isnan(r) and r >= threshold:
+                        adj[c1].add(c2)
+                        adj[c2].add(c1)
+
+            # ------------------------------------------------------------------ #
+            # Step 3: Connected-component clustering; keep ONE rep per cluster   #
+            # ------------------------------------------------------------------ #
+            visited = set()
+            dropped_cols = set()
+
+            def _score(col):
+                base = y_scores.get(col, 0.0)
+                # Large bonus for features with proven additive target signal
+                if col in target_enhanced:
+                    base += 10.0
+                return base
+
+            for start in num_cols:
+                if start in visited:
+                    continue
+                # BFS to find the full cluster
+                cluster = []
+                q = [start]
+                visited.add(start)
+                for curr in q:
+                    cluster.append(curr)
+                    for nb in adj[curr]:
+                        if nb not in visited:
+                            visited.add(nb)
+                            q.append(nb)
+
+                if len(cluster) > 1:
+                    if y_scores:
+                        # Keep the highest-scoring member, drop the rest
+                        sorted_cluster = sorted(cluster, key=_score, reverse=True)
+                    else:
+                        # No y provided: keep the column that appears first
+                        sorted_cluster = sorted(
+                            cluster, key=lambda c: num_cols.index(c))
+                    for redundant in sorted_cluster[1:]:
+                        dropped_cols.add(redundant)
 
             dropped_list = sorted(list(dropped_cols))
             pruned_df = df.drop(columns=dropped_list)
-            logger.info("prune_collinear: Dropped %d collinear feature(s) (|r| >= %.2f): %s", len(dropped_list), threshold, dropped_list)
+            logger.info(
+                "prune_collinear: Dropped %d collinear feature(s) (|r| >= %.2f): %s",
+                len(dropped_list), threshold, dropped_list
+            )
             return pruned_df, dropped_list
         except Exception as e:
             logger.error("Error in prune_collinear: %s", e)
