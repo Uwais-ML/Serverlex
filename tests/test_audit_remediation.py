@@ -39,7 +39,7 @@ def test_outlier_cell_wise_preserves_target():
 def test_outlier_cell_wise_only_modifies_offending_cells():
     """Bug 1 Regression: Outlier clipping is cell-wise, leaving normal cells in that row unchanged."""
     df = pd.DataFrame({
-        "col_a": [10.0, 10.0, 10.0, 10.0, 1000.0],  # index 4 is extreme outlier
+        "col_a": [10.0, 12.0, 14.0, 16.0, 1000.0],  # index 4 is extreme outlier
         "col_b": [25.0, 25.0, 25.0, 25.0, 25.0]     # index 4 is normal
     })
     cleaner = Clean(df)
@@ -188,3 +188,64 @@ def test_model_evaluator_returns_metrics_dict():
     assert metrics["task"] == "Classification"
     assert "accuracy" in metrics
     assert "f1_weighted" in metrics
+
+
+def test_outlier_preserves_binary_and_degenerate_columns():
+    """1.2.2 Critical Bug 1 Regression: Binary and degenerate IQR columns must not be flattened."""
+    np.random.seed(42)
+    n = 500
+    df = pd.DataFrame({
+        "continuous": np.random.normal(100, 15, n),
+        "has_partner": np.random.choice([0, 1], size=n, p=[0.8, 0.2]),  # Q1=0, Q3=0, IQR=0
+        "is_senior": np.random.choice([0, 1], size=n, p=[0.85, 0.15])
+    })
+    # Inject one genuine outlier into continuous only
+    df.loc[0, "continuous"] = 9999.0
+
+    cleaner = Clean(df)
+    cleaned = cleaner.total_clean(outlier_method="IQR", outlier_param="m")
+
+    # Both binary columns must remain strictly {0, 1}
+    assert set(cleaned["has_partner"].unique()).issubset({0, 1}), f"has_partner corrupted: {cleaned['has_partner'].unique()}"
+    assert set(cleaned["is_senior"].unique()).issubset({0, 1}), f"is_senior corrupted: {cleaned['is_senior'].unique()}"
+    # The genuine outlier in continuous was cleaned
+    assert cleaned.loc[0, "continuous"] < 9999.0
+
+
+def test_small_batch_drift_no_false_alarms():
+    """1.2.2 Critical Bug 2 Regression: Small batches (n=30) from same distribution must not false alarm."""
+    np.random.seed(42)
+    ref_df = pd.DataFrame({
+        "tenure": np.random.exponential(scale=20, size=1000),
+        "monthly": np.random.normal(70, 20, size=1000)
+    })
+    detector = DriftDetector(ref_df)
+
+    # 10 random draws of n=30 from the exact same distribution
+    false_alarm_count = 0
+    for seed in range(10):
+        np.random.seed(100 + seed)
+        cur_df = pd.DataFrame({
+            "tenure": np.random.exponential(scale=20, size=30),
+            "monthly": np.random.normal(70, 20, size=30)
+        })
+        report = detector.detect_drift(cur_df)
+        if report["Drift_Detected"].any():
+            false_alarm_count += 1
+
+    # Should have 0 false alarms on n=30
+    assert false_alarm_count == 0, f"False alarms observed on same-distribution batches: {false_alarm_count}/10"
+
+
+def test_deployer_hmac_missing_key_clear_error(tmp_path):
+    """1.2.2 Minor Polish Regression: Loading an HMAC bundle without key raises clear message."""
+    pipeline = MLPipeline()
+    model = RandomForestClassifier()
+    deployer = ModelDeployer(pipeline=pipeline, model=model)
+
+    bundle_path = str(tmp_path / "protected_bundle.joblib")
+    deployer.save(bundle_path, hmac_key="secret")
+
+    with pytest.raises(ValueError, match="saved with HMAC authenticity protection"):
+        ModelDeployer.load(bundle_path)
+

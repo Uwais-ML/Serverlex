@@ -133,6 +133,9 @@ class ModelDeployer:
             logger.info("Bundle authenticity verified successfully via HMAC-SHA256")
             return
 
+        if os.path.exists(filepath + ".hmac") and hmac_key is None:
+            raise ValueError(f"Bundle '{filepath}' was saved with HMAC authenticity protection (.hmac sidecar found). Please provide 'hmac_key' to load and verify it.")
+
         meta_path = filepath + ".sha256"
         if not os.path.exists(meta_path):
             raise FileNotFoundError(f"Integrity check failed: missing SHA-256 signature file '{meta_path}'")

@@ -121,18 +121,24 @@ class DriftDetector:
                     psi = self.calculate_psi(ref_vals, cur_vals)
                     w_dist = float(np.round(wasserstein_distance(ref_vals, cur_vals), 4))
 
-                    # Guard against small sample noise: KS p-value requires sample size >= 10
-                    if len(cur_vals) < 10:
+                    # Guard against small sample noise: Reliable drift analysis requires sample size >= 50
+                    if len(cur_vals) < 50:
                         is_drift = False
-                        severity = "Insufficient Samples (< 10)"
+                        severity = "Insufficient Samples (< 50)"
                     else:
-                        is_drift = (psi >= self.psi_threshold) or (p_val < self.alpha and psi >= 0.10)
-                        if psi >= 0.25:
-                            severity = "High"
-                        elif psi >= 0.10:
-                            severity = "Moderate"
-                        else:
+                        # Correct for finite-sample PSI expectation floor E[PSI] approx (B-1)*(1/n_cur + 1/n_ref)
+                        psi_floor = 9.0 * (1.0 / len(cur_vals) + 1.0 / len(ref_vals))
+                        effective_threshold = max(self.psi_threshold, 2.0 * psi_floor)
+
+                        # Require BOTH statistical significance (p < alpha) AND practical significance (PSI >= threshold)
+                        is_drift = (psi >= effective_threshold) and (p_val < self.alpha)
+
+                        if not is_drift:
                             severity = "None"
+                        elif psi >= max(0.25, 2.5 * psi_floor):
+                            severity = "High"
+                        else:
+                            severity = "Moderate"
 
                     if is_drift:
                         drift_count += 1
@@ -154,8 +160,8 @@ class DriftDetector:
                     ref_counts=self.ref_data[col].astype(str).value_counts()
                     cur_counts=cur_data[col].astype(str).value_counts()
 
-                    # Guard against tiny batches: Chi-square and PSI are unstable for n < 10
-                    if len(cur_series) < 10:
+                    # Guard against small batches: Chi-square and PSI are unstable for n < 50
+                    if len(cur_series) < 50:
                         self.drift_results.append({
                             "Feature": col,
                             "Type": "Categorical",
@@ -164,7 +170,7 @@ class DriftDetector:
                             "PSI": 0.0,
                             "Wasserstein": None,
                             "Drift_Detected": False,
-                            "Severity": "Insufficient Samples (< 10)"
+                            "Severity": "Insufficient Samples (< 50)"
                         })
                         continue
 
@@ -184,8 +190,19 @@ class DriftDetector:
                     cur_pct = np.where(cur_aligned == 0, 0.0001, cur_aligned) / cur_aligned.sum()
                     cat_psi = float(np.round(np.sum((cur_pct - ref_pct) * np.log(cur_pct / ref_pct)), 4))
 
-                    is_drift = (cat_psi >= self.psi_threshold) or (p_val < self.alpha and cat_psi >= 0.10)
-                    severity = "High" if cat_psi >= 0.25 else ("Moderate" if cat_psi >= 0.10 else "None")
+                    cat_bins = max(2, len(all_cats))
+                    cat_psi_floor = (cat_bins - 1) * (1.0 / len(cur_series) + 1.0 / len(ref_series))
+                    effective_cat_threshold = max(self.psi_threshold, 2.0 * cat_psi_floor)
+
+                    # Require BOTH statistical significance and practical shift
+                    is_drift = (cat_psi >= effective_cat_threshold) and (p_val < self.alpha)
+
+                    if not is_drift:
+                        severity = "None"
+                    elif cat_psi >= max(0.25, 2.5 * cat_psi_floor):
+                        severity = "High"
+                    else:
+                        severity = "Moderate"
 
                     if is_drift:
                         drift_count += 1

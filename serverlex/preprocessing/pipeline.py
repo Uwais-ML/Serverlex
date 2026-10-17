@@ -271,7 +271,7 @@ class MLPipeline:
         logger.info("Registered custom model '%s'", name)
         return self
 
-    def evaluate_baseline_models(self, X=None, y=None, cv=5):
+    def evaluate_baseline_models(self, X=None, y=None, cv=5, verbose=False):
         try:
             if X is None and y is None:
                 if hasattr(self, 'X_train') and self.X_train is not None and hasattr(self, 'y_train') and self.y_train is not None:
@@ -303,7 +303,8 @@ class MLPipeline:
                 }
                 models.update(self.custom_models)
 
-                logger.info("Evaluating %d baseline models (task=%s, cv=%d)", len(models), task, cv)
+                if verbose:
+                    logger.info("Evaluating %d baseline models (task=%s, cv=%d)", len(models), task, cv)
 
                 for name, model in models.items():
                     acc_scores=cross_val_score(model, X, y, cv=kf, scoring='accuracy')
@@ -311,7 +312,7 @@ class MLPipeline:
                     results.append({
                         "Model": name,
                         "Accuracy": round(float(acc_scores.mean()), 4),
-                        "F1": round(float(f1_scores.mean()), 4)
+                        "F1_Weighted": round(float(f1_scores.mean()), 4)
                     })
             else:
                 kf=KFold(n_splits=cv, shuffle=True, random_state=42)
@@ -323,7 +324,8 @@ class MLPipeline:
                 }
                 models.update(self.custom_models)
 
-                logger.info("Evaluating %d baseline models (task=%s, cv=%d)", len(models), task, cv)
+                if verbose:
+                    logger.info("Evaluating %d baseline models (task=%s, cv=%d)", len(models), task, cv)
 
                 for name, model in models.items():
                     r2_scores=cross_val_score(model, X, y, cv=kf, scoring='r2')
@@ -335,7 +337,8 @@ class MLPipeline:
                     })
 
             res_df=pd.DataFrame(results).sort_values(by=list(results[0].keys())[1], ascending=False)
-            logger.info("Baseline leaderboard:\n%s", res_df.to_string(index=False))
+            if verbose:
+                logger.info("Baseline leaderboard:\n%s", res_df.to_string(index=False))
             return res_df
         except Exception as e:
             logger.error("Error evaluating models: %s", e)

@@ -35,10 +35,29 @@ class Clean:
 
     seperate = separate  # Backward-compatibility typo alias
 
-    def outliers_IQR(self, param='m', exclude=()):
+    def _get_outlier_candidates(self, exclude=(), method='IQR'):
+        exclude_set = set(exclude) if exclude else set()
+        cols = []
+        for c in self.numerical_columns.columns:
+            if c in exclude_set:
+                continue
+            s = self.numerical_columns[c].dropna()
+            # 1. Skip boolean dtypes and binary {0, 1} indicator columns
+            if pd.api.types.is_bool_dtype(s) or (s.nunique() <= 2 and set(s.unique()).issubset({0, 1, 0.0, 1.0})):
+                continue
+            # 2. For IQR, skip columns where Q1 == Q3 (degenerate IQR = 0)
+            if method == 'IQR':
+                q1 = float(s.quantile(0.25))
+                q3 = float(s.quantile(0.75))
+                if q3 - q1 == 0:
+                    logger.info("Skipping column '%s' for IQR outlier handling: degenerate IQR (Q1=Q3=%.2f)", c, q1)
+                    continue
+            cols.append(c)
+        return cols
+
+    def outliers_IQR(self, param='m', exclude=(), warn_high_outlier_pct=0.10):
         self.separate()
-        exclude = set(exclude) if exclude else set()
-        cols = [c for c in self.numerical_columns.columns if c not in exclude]
+        cols = self._get_outlier_candidates(exclude=exclude, method='IQR')
         if not cols:
             return self.data
 
@@ -51,8 +70,22 @@ class Clean:
 
         bad = (num < lower_bound) | (num > upper_bound)
 
+        # Warn if a column flags more than threshold of rows
+        for col in cols:
+            bad_rate = float(bad[col].mean())
+            if bad_rate > warn_high_outlier_pct:
+                logger.warning("Column '%s' flagged %.1f%% of rows as outliers under IQR. Consider excluding this feature from outlier clipping.", col, bad_rate * 100)
+
+        # In row drop mode ('r'), track class balance if target was provided in exclude
         if param in ['r', 'drop', 'remove']:
-            self.data = self.data.loc[~bad.any(axis=1)]
+            rows_to_drop = bad.any(axis=1)
+            for ex in exclude:
+                if ex in self.data.columns and self.data[ex].nunique() <= 5:
+                    before_counts = self.data[ex].value_counts(normalize=True).to_dict()
+                    after_counts = self.data.loc[~rows_to_drop, ex].value_counts(normalize=True).to_dict()
+                    logger.info("Outlier row removal class shift for '%s': before=%s, after=%s", ex, before_counts, after_counts)
+
+            self.data = self.data.loc[~rows_to_drop]
             self.separate()
             return self.data
 
@@ -65,10 +98,9 @@ class Clean:
         self.separate()
         return self.data
 
-    def outliers_Z(self, param='m', threshold=None, exclude=()):
+    def outliers_Z(self, param='m', threshold=None, exclude=(), warn_high_outlier_pct=0.10):
         self.separate()
-        exclude = set(exclude) if exclude else set()
-        cols = [c for c in self.numerical_columns.columns if c not in exclude]
+        cols = self._get_outlier_candidates(exclude=exclude, method='Z')
         if not cols:
             return self.data
 
@@ -81,8 +113,14 @@ class Clean:
 
         bad = z_score.abs() >= t
 
+        for col in cols:
+            bad_rate = float(bad[col].mean())
+            if bad_rate > warn_high_outlier_pct:
+                logger.warning("Column '%s' flagged %.1f%% of rows as outliers under Z-score (threshold=%.1f).", col, bad_rate * 100, t)
+
         if param in ['r', 'drop', 'remove']:
-            self.data = self.data.loc[~bad.any(axis=1)]
+            rows_to_drop = bad.any(axis=1)
+            self.data = self.data.loc[~rows_to_drop]
             self.separate()
             return self.data
 
