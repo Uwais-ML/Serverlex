@@ -88,3 +88,71 @@ class FeatureSelector:
     def get_ranked_scores(self):
         """Returns DataFrame of features ranked by Mutual Information."""
         return pd.DataFrame(list(self.feature_scores.items()), columns=["Feature", "Mutual_Information_Score"])
+
+    @staticmethod
+    def prune_collinear(X, threshold=0.85, y=None):
+        """
+        Standalone collinearity pruning utility:
+        - Finds pairs of features with Pearson |r| >= threshold.
+        - If target 'y' is provided, keeps the feature with higher predictive correlation with y.
+        - If 'y' is None, drops the second feature in the pair.
+
+        Returns:
+            pruned_X (pd.DataFrame): DataFrame with collinear duplicates removed.
+            dropped_cols (list): Names of features dropped due to collinearity.
+        """
+        try:
+            if not isinstance(X, pd.DataFrame):
+                df = pd.DataFrame(X)
+            else:
+                df = X.copy()
+
+            num_cols = df.select_dtypes(include='number').columns.tolist()
+            if len(num_cols) < 2:
+                return df, []
+
+            corr_matrix = df[num_cols].corr().abs()
+            dropped_cols = set()
+
+            # Pre-compute correlation with target y if provided
+            y_scores = {}
+            if y is not None:
+                y_series = pd.to_numeric(y, errors='coerce') if not isinstance(y, pd.Series) else y
+                for col in num_cols:
+                    try:
+                        valid_mask = df[col].notna() & y_series.notna()
+                        if valid_mask.sum() > 5:
+                            corr_val = float(np.corrcoef(df[col][valid_mask], y_series[valid_mask])[0, 1])
+                            y_scores[col] = abs(corr_val) if not np.isnan(corr_val) else 0.0
+                        else:
+                            y_scores[col] = 0.0
+                    except Exception:
+                        y_scores[col] = 0.0
+
+            for i in range(len(num_cols)):
+                col_i = num_cols[i]
+                if col_i in dropped_cols:
+                    continue
+                for j in range(i + 1, len(num_cols)):
+                    col_j = num_cols[j]
+                    if col_j in dropped_cols:
+                        continue
+                    r_val = corr_matrix.loc[col_i, col_j]
+                    if not np.isnan(r_val) and r_val >= threshold:
+                        if y_scores:
+                            if y_scores.get(col_i, 0) >= y_scores.get(col_j, 0):
+                                dropped_cols.add(col_j)
+                            else:
+                                dropped_cols.add(col_i)
+                                break
+                        else:
+                            dropped_cols.add(col_j)
+
+            dropped_list = sorted(list(dropped_cols))
+            pruned_df = df.drop(columns=dropped_list)
+            logger.info("prune_collinear: Dropped %d collinear feature(s) (|r| >= %.2f): %s", len(dropped_list), threshold, dropped_list)
+            return pruned_df, dropped_list
+        except Exception as e:
+            logger.error("Error in prune_collinear: %s", e)
+            return X, []
+

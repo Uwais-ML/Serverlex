@@ -58,7 +58,7 @@ class DriftDetector:
         except Exception:
             return 0.0
 
-    def detect_drift(self, current_data):
+    def detect_drift(self, current_data, alert_webhook=None, webhook_timeout=5, raise_on_drift=False):
         try:
             cur_data=current_data.copy() if isinstance(current_data, pd.DataFrame) else pd.DataFrame(current_data)
             self.drift_results=[]
@@ -221,7 +221,38 @@ class DriftDetector:
 
             report_df=pd.DataFrame(self.drift_results)
             logger.info("Drift analysis complete: %d/%d features drifted or missing", drift_count, len(ref_cols))
+
+            if alert_webhook and drift_count > 0:
+                self._dispatch_webhook_alert(alert_webhook, report_df, drift_count, timeout=webhook_timeout)
+
+            if raise_on_drift and drift_count > 0:
+                drifted_names = report_df[report_df["Drift_Detected"] == True]["Feature"].tolist()
+                raise RuntimeError(f"Critical data drift detected across {drift_count} feature(s): {drifted_names}")
+
             return report_df
         except Exception as e:
             logger.error("Error in detect_drift: %s", e)
             raise
+
+    @staticmethod
+    def _dispatch_webhook_alert(webhook_url, report_df, drift_count, timeout=5):
+        import urllib.request
+        import json
+        from datetime import datetime
+
+        drifted = report_df[report_df["Drift_Detected"] == True].to_dict(orient="records")
+        payload = {
+            "event": "serverlex_data_drift_alert",
+            "timestamp": datetime.now().isoformat(),
+            "drift_count": int(drift_count),
+            "total_features": len(report_df),
+            "drifted_features": drifted
+        }
+        try:
+            data = json.dumps(payload).encode("utf-8")
+            req = urllib.request.Request(webhook_url, data=data, headers={"Content-Type": "application/json"})
+            with urllib.request.urlopen(req, timeout=timeout) as response:
+                logger.info("Dispatched drift alert to webhook '%s' (status=%s)", webhook_url, getattr(response, 'status', 200))
+        except Exception as e:
+            logger.warning("Failed to dispatch drift alert to webhook '%s': %s", webhook_url, e)
+

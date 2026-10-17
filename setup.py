@@ -6,7 +6,7 @@ with open("README.md", "r", encoding="utf-8") as fh:
 
 setup(
     name="serverlex",
-    version="1.2.4",
+    version="1.3.0",
     author="Serverlex Team",
     description="Production-Safe ML Preprocessing, Diagnostics, Tuning, and Serving Platform",
     long_description=long_description,

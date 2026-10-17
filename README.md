@@ -3,7 +3,7 @@
 
 [![Python Version](https://img.shields.io/badge/python-3.9%20%7C%203.10%20%7C%203.11%20%7C%203.12-blue.svg)](https://www.python.org/)
 [![PyPI version](https://img.shields.io/pypi/v/serverlex.svg?color=blue)](https://pypi.org/project/serverlex/)
-[![Tests](https://img.shields.io/badge/tests-39%20passed-brightgreen.svg)](https://github.com/Uwais-ML/Serverlex/actions)
+[![Tests](https://img.shields.io/badge/tests-47%20passed-brightgreen.svg)](https://github.com/Uwais-ML/Serverlex/actions)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Code Style](https://img.shields.io/badge/code%20style-production%20safe-green.svg)](https://github.com/Uwais-ML/Serverlex)
 
@@ -13,12 +13,14 @@
 
 ## 🚀 Key Highlights & Guarantees
 
-- **Zero Data Leakage**: Pipeline parameters (medians, modes, one-hot category vocabularies, scaler stats) are strictly computed on training splits and locked during inference.
-- **Exact Train/Serve Parity**: Predict on single records (`dict`), small micro-batches, or large DataFrames with exact prediction equivalence and zero categorical drift.
-- **Degenerate-Safe Outlier Cleaning**: Cell-wise IQR and Z-score handling protects binary flags, class targets, and degenerate discrete distributions from collapsing bounds.
+- **Zero Data Leakage & Auto-Remediation**: Pipeline parameters are strictly computed on training splits. `auto_remediate=True` auto-drops ID columns, PII, and target proxies ($r \ge 0.90$).
+- **Turnkey FastAPI & Docker Export**: `ModelDeployer.export_api()` generates a production REST microservice with Swagger docs, Pydantic validation, and a Dockerfile in 1 line.
+- **Pre-Inference Latency & SLA Profiler**: `ModelDeployer.benchmark()` calculates p50, p95, p99 latency (ms) and throughput (req/s) before deployment.
+- **Standalone HTML Audit Dashboards**: `DataGuard.to_html_report()` creates a self-contained, dark-mode report with dataset Health Scores (A+ to F).
+- **Production Drift Webhook Alerts**: `DriftDetector.detect_drift(alert_webhook=...)` fires automated JSON alerts to Slack/PagerDuty when population shift exceeds thresholds.
+- **Collinearity & Ratio Pruning**: `FeatureSelector.prune_collinear()` removes redundant collinear duplicates while preserving features with higher predictive power.
+- **Exact Train/Serve Parity**: Predict on single records (`dict`), micro-batches, or DataFrames with exact prediction equivalence and zero categorical drift.
 - **Enterprise Serving Security**: Cryptographic SHA-256 sidecar verification and HMAC-SHA256 authenticity checks prevent untrusted model deserialization.
-- **Statistical Drift Monitoring**: Combines Kolmogorov-Smirnov, Chi-Square, Wasserstein distance, and finite-sample corrected Population Stability Index (PSI) to eliminate small-batch false alarms.
-- **High-Throughput Serving**: Sub-10ms p50 single-record inference latency ready for microservices and API gateways.
 
 ---
 
@@ -241,7 +243,7 @@ evaluator.plot_confusion_matrix(y_test, preds, save_path="confusion_matrix.png")
 
 ## 🧪 Testing & Verification
 
-Serverlex features a comprehensive automated test suite with **39 unit and regression tests** covering train/serve parity, outlier preservation, crypto authenticity, and drift edge cases:
+Serverlex features a comprehensive automated test suite with **47 unit and regression tests** covering train/serve parity, outlier preservation, crypto authenticity, and drift edge cases:
 
 ```bash
 # Run the test suite:

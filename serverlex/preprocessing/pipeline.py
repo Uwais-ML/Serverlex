@@ -34,6 +34,9 @@ class MLPipeline:
         self.scaler_iqr={}
         self.date_col=None
         self.id_cols=[]
+        self.leakage_cols=[]
+        self.pii_cols=[]
+        self.remediated_cols=[]
         self.custom_models={}
         self.X_train=None
         self.y_train=None
@@ -56,7 +59,7 @@ class MLPipeline:
     # ==========================
     # 1. FIT (Learn & Save on self)
     # ==========================
-    def fit(self, df, target=None, encode='onehot', scale='standard', data_time=None, numeric_string_cols=None, drop_id_cols=True, id_cols=None, **kwargs):
+    def fit(self, df, target=None, encode='onehot', scale='standard', data_time=None, numeric_string_cols=None, drop_id_cols=True, id_cols=None, auto_remediate=False, drop_leakage=False, leakage_threshold=0.90, drop_pii=False, **kwargs):
         try:
             valid_scales = ['standard', 'minmax', 'robust', None]
             if scale not in valid_scales:
@@ -105,6 +108,8 @@ class MLPipeline:
 
             # 1. Clean the training data using your Clean class with target protection
             clean_kwargs = kwargs.copy()
+            for key in ["auto_remediate", "drop_leakage", "leakage_threshold", "drop_pii", "drop_id_cols", "id_cols"]:
+                clean_kwargs.pop(key, None)
             if self.target:
                 exclude = clean_kwargs.get("exclude_outliers", [])
                 if isinstance(exclude, (list, tuple, set)):
@@ -136,49 +141,83 @@ class MLPipeline:
             self.cleaner.data=self.data
             self.cleaner.separate()
 
-            # 3. Detect and skip ID columns
-            #    DataGuard runs a lightweight uniqueness scan on the *cleaned* data so
-            #    column names are already normalized (e.g. "Cust ID" → "cust_id").
+            # 3. Detect and skip ID, Target Leakage, and PII columns
             _id_cols_set = set()
+            _leakage_cols_set = set()
+            _pii_cols_set = set()
+
+            if auto_remediate:
+                drop_id_cols = True
+                drop_leakage = True
+                drop_pii = True
+
             if id_cols is not None:
-                # Caller explicitly supplied the list — normalize and trust it.
                 _id_cols_set = {c.strip().lower().replace(' ', '_') for c in id_cols}
-            elif drop_id_cols:
+
+            if drop_id_cols or drop_leakage or drop_pii:
                 try:
                     from serverlex.diagnostics.dataguard import DataGuard as _DG
-                    _guard = _DG(self.data)
-                    _guard.check_id_columns()
-                    _id_cols_set = set(getattr(_guard, 'id_cols', []))
-                    if _id_cols_set:
-                        logger.warning(
-                            "DataGuard detected ID column(s) — skipping from encoding and feature matrix: %s. "
-                            "Pass drop_id_cols=False to override.",
-                            sorted(_id_cols_set)
-                        )
-                except Exception:
-                    pass  # DataGuard failure is non-fatal; proceed without exclusion
-            self.id_cols = sorted(list(_id_cols_set))
+                    _guard = _DG(self.data, target=self.target)
 
-            # 4. Memorize missing value fill values directly on self (excluding ID columns & target)
+                    if drop_id_cols and id_cols is None:
+                        _guard.check_id_columns()
+                        _id_cols_set = set(getattr(_guard, 'id_cols', []))
+                        if _id_cols_set:
+                            logger.warning(
+                                "DataGuard detected ID column(s) — skipping from encoding and feature matrix: %s. "
+                                "Pass drop_id_cols=False to override.",
+                                sorted(_id_cols_set)
+                            )
+
+                    if drop_leakage and self.target:
+                        _guard.check_target_leakage(target=self.target, threshold=leakage_threshold)
+                        _leakage_cols_set = {col for col, _ in getattr(_guard, 'leakage_cols', []) if col != self.target}
+                        if _leakage_cols_set:
+                            logger.warning(
+                                "DataGuard detected target leakage column(s) (|r| >= %.2f) — dropping to prevent target contamination: %s",
+                                leakage_threshold, sorted(_leakage_cols_set)
+                            )
+
+                    if drop_pii:
+                        _guard.check_cardinality()
+                        _pii_cols_set = {c for c in getattr(_guard, 'pii_cols', []) if c != self.target}
+                        if _pii_cols_set:
+                            logger.warning(
+                                "DataGuard detected PII column(s) — dropping to protect privacy and prevent overfitting: %s",
+                                sorted(_pii_cols_set)
+                            )
+                except Exception as _e:
+                    logger.debug("DataGuard audit check during pipeline fit encountered: %s", _e)
+
+            self.id_cols = sorted(list(_id_cols_set))
+            self.leakage_cols = sorted(list(_leakage_cols_set))
+            self.pii_cols = sorted(list(_pii_cols_set))
+            self.remediated_cols = sorted(list(_id_cols_set | _leakage_cols_set | _pii_cols_set))
+
+            # 4. Memorize missing value fill values directly on self (excluding remediated columns & target)
+            _exclude_fill = set(self.remediated_cols)
+            if self.target:
+                _exclude_fill.add(self.target)
+
             for col in self.cleaner.numerical_columns.columns:
-                if col != self.target and col not in _id_cols_set:
+                if col not in _exclude_fill:
                     self.num_fill[col]=float(self.data[col].mean()) if not self.data[col].dropna().empty else 0.0
 
             for col in self.cleaner.categorical_columns.columns:
-                if col != self.target and col not in _id_cols_set:
+                if col not in _exclude_fill:
                     cleaned_series = self.data[col].dropna().astype(str).str.lower().str.replace(' ', '')
                     mode_val = cleaned_series.mode()
                     self.cat_fill[col] = mode_val[0] if not mode_val.empty else 'unknown'
 
             # 5. Encode categoricals and memorize exact categories
             train_X=self.data.copy()
-            drop_from_train = set(_id_cols_set)
+            drop_from_train = set(self.remediated_cols)
             if self.target and self.target in train_X.columns:
                 drop_from_train.add(self.target)
             train_X=train_X.drop(columns=[c for c in drop_from_train if c in train_X.columns])
 
             cat_cols=[c for c in self.cleaner.categorical_columns.columns
-                      if c != self.target and c in train_X.columns and c not in _id_cols_set]
+                      if c in train_X.columns and c not in _exclude_fill]
             self.cat_categories = {}
             for col in cat_cols:
                 # Fill missing before string casting (Bug 3 fix)
@@ -239,7 +278,14 @@ class MLPipeline:
     # ==========================
     def transform(self, df):
         try:
-            out=df.copy()
+            if isinstance(df, dict):
+                out = pd.DataFrame([df])
+            elif isinstance(df, list):
+                out = pd.DataFrame(df)
+            elif isinstance(df, pd.DataFrame):
+                out = df.copy()
+            else:
+                out = pd.DataFrame(df)
 
             # 1. Clean column names
             out.columns=out.columns.str.strip().str.lower().str.replace(' ', '_').str.replace(r'[^\w_]', '', regex=True)
@@ -275,9 +321,10 @@ class MLPipeline:
                 out[f'{self.date_col}_dayofweek']=dt.dt.dayofweek
                 out=out.drop(columns=[self.date_col])
 
-            # 2.5 Drop ID columns if present
-            if hasattr(self, 'id_cols') and self.id_cols:
-                out=out.drop(columns=[c for c in self.id_cols if c in out.columns])
+            # 2.5 Drop remediated columns if present (ID, target leakage, PII)
+            cols_to_drop = getattr(self, 'remediated_cols', None) or getattr(self, 'id_cols', [])
+            if cols_to_drop:
+                out=out.drop(columns=[c for c in cols_to_drop if c in out.columns])
 
             # 3. Fill missing using memorized self.num_fill and self.cat_fill
             for col, val in self.num_fill.items():
