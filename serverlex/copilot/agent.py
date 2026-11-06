@@ -9,7 +9,8 @@ from typing import Optional, Union, Dict, Any
 
 logger = logging.getLogger("ServerlexCopilot")
 
-DEFAULT_MODEL_DIR = os.path.join(os.path.dirname(__file__), "model")
+DEFAULT_LOCAL_DIR = os.path.join(os.path.dirname(__file__), "model")
+DEFAULT_HF_REPO = "Uwais-ML-dev/serverlex-copilot-0.5b"
 
 class ServerlexCopilot:
     """
@@ -18,15 +19,19 @@ class ServerlexCopilot:
     - Resolves ModelDeployer serving exceptions, HMAC mismatches, and schema violations.
     - Interprets DriftDetector PSI & KS distribution shifts.
     - Generates multi-step, leakage-safe Serverlex code workflows on demand.
+    - Auto-downloads from Hugging Face Hub (Uwais-ML-dev/serverlex-copilot-0.5b) if local weights are not bundled.
     """
 
     def __init__(self, model_path: Optional[str] = None, device: Optional[str] = None):
-        self.model_path = model_path or DEFAULT_MODEL_DIR
-        if not os.path.exists(self.model_path):
-            raise FileNotFoundError(
-                f"Copilot model directory not found at '{self.model_path}'. "
-                "Ensure serverlex-0.5b-merged weights are placed in serverlex/copilot/model/."
-            )
+        # 1. Check local model folder first
+        chosen_path = model_path or DEFAULT_LOCAL_DIR
+        local_weights_exist = os.path.exists(os.path.join(chosen_path, "model.safetensors"))
+
+        if local_weights_exist:
+            self.model_path = chosen_path
+        else:
+            # Fall back to Hugging Face Hub hosted weights (auto-cached to ~/.cache/huggingface/)
+            self.model_path = DEFAULT_HF_REPO
 
         self.device = device or ("mps" if self._has_mps() else ("cuda" if self._has_cuda() else "cpu"))
         self._tokenizer = None
