@@ -27,4 +27,12 @@ setup(
         "scikit-learn>=1.3.0",
         "joblib>=1.3.0",
     ],
+    extras_require={
+        "copilot": ["torch>=2.0.0", "transformers>=4.40.0", "accelerate>=0.26.0"]
+    },
+    entry_points={
+        "console_scripts": [
+            "serverlex-copilot=serverlex.copilot.cli:main"
+        ]
+    },
 )

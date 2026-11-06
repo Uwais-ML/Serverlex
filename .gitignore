@@ -43,7 +43,10 @@ env/
 *.pkl
 *.png
 test_output/
-scratch/
+serverlex/copilot/model/
+*.safetensors
+serverlex_copilot_model/
+serverlex-0.5b-merged.zip
 experiments/outputs/
 netflix_titles.csv
 customers.csv

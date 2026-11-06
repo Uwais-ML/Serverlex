@@ -9,6 +9,7 @@ from serverlex.modeling.ensemble import EnsembleBuilder
 from serverlex.modeling.selector import FeatureSelector
 from serverlex.visualization.eda import Visualize
 from serverlex.serving.deployer import ModelDeployer
+from serverlex.copilot.agent import ServerlexCopilot, get_copilot
 
 __all__ = [
     "Clean",
@@ -22,6 +23,8 @@ __all__ = [
     "FeatureSelector",
     "Visualize",
     "ModelDeployer",
+    "ServerlexCopilot",
+    "get_copilot",
 ]
 
-__version__ = "1.3.2"
+__version__ = "1.3.3"
