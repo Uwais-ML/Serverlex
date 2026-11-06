@@ -1,14 +1,15 @@
 """
 Fine-Tuning a 0.5B Model on Serverlex
 Automated script for Google Colab (T4 GPU recommended).
+Compatible with latest trl, transformers, and peft.
 """
 import os
 import json
 import torch
 from datasets import Dataset
 from transformers import AutoTokenizer, AutoModelForCausalLM, TrainingArguments
-from peft import LoraConfig
-from trl import SFTTrainer
+from peft import LoraConfig, get_peft_model
+from trl import SFTTrainer, SFTConfig
 
 # 1. Determine dataset path
 script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -58,6 +59,20 @@ tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
 if tokenizer.pad_token is None:
     tokenizer.pad_token = tokenizer.eos_token
 
+# Pre-tokenize dataset to ensure universal compatibility across TRL versions
+def tokenize_fn(batch):
+    tokens = tokenizer(
+        batch["text"],
+        max_length=1024,
+        truncation=True,
+        padding=False
+    )
+    tokens["labels"] = tokens["input_ids"].copy()
+    return tokens
+
+print("Tokenizing dataset...")
+tokenized_dataset = dataset.map(tokenize_fn, batched=True, remove_columns=["text"])
+
 model = AutoModelForCausalLM.from_pretrained(
     MODEL_ID,
     torch_dtype=torch.bfloat16 if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else torch.float16,
@@ -74,33 +89,57 @@ peft_config = LoraConfig(
     target_modules=["q_proj", "k_proj", "v_proj", "o_proj"]
 )
 
-# 5. Training arguments
-training_args = TrainingArguments(
-    output_dir="./serverlex-0.5b-checkpoints",
-    per_device_train_batch_size=4,
-    gradient_accumulation_steps=4,
-    learning_rate=2e-4,
-    lr_scheduler_type="cosine",
-    num_train_epochs=3,
-    logging_steps=20,
-    save_strategy="epoch",
-    fp16=torch.cuda.is_available() and not torch.cuda.is_bf16_supported(),
-    bf16=torch.cuda.is_available() and torch.cuda.is_bf16_supported(),
-    report_to="none"
-)
+# 5. Training arguments (universal across new & old TRL / Transformers)
+try:
+    # Latest TRL uses SFTConfig
+    training_args = SFTConfig(
+        output_dir="./serverlex-0.5b-checkpoints",
+        per_device_train_batch_size=4,
+        gradient_accumulation_steps=4,
+        learning_rate=2e-4,
+        lr_scheduler_type="cosine",
+        num_train_epochs=3,
+        logging_steps=20,
+        save_strategy="epoch",
+        max_seq_length=1024,
+        fp16=torch.cuda.is_available() and not torch.cuda.is_bf16_supported(),
+        bf16=torch.cuda.is_available() and torch.cuda.is_bf16_supported(),
+        report_to="none"
+    )
+except Exception:
+    training_args = TrainingArguments(
+        output_dir="./serverlex-0.5b-checkpoints",
+        per_device_train_batch_size=4,
+        gradient_accumulation_steps=4,
+        learning_rate=2e-4,
+        lr_scheduler_type="cosine",
+        num_train_epochs=3,
+        logging_steps=20,
+        save_strategy="epoch",
+        fp16=torch.cuda.is_available() and not torch.cuda.is_bf16_supported(),
+        bf16=torch.cuda.is_available() and torch.cuda.is_bf16_supported(),
+        report_to="none"
+    )
 
 # 6. SFT Trainer
-trainer = SFTTrainer(
-    model=model,
-    train_dataset=dataset,
-    dataset_text_field="text",
-    max_seq_length=1024,
-    tokenizer=tokenizer,
-    args=training_args,
-    peft_config=peft_config
-)
+try:
+    trainer = SFTTrainer(
+        model=model,
+        train_dataset=tokenized_dataset,
+        args=training_args,
+        peft_config=peft_config
+    )
+except TypeError:
+    trainer = SFTTrainer(
+        model=model,
+        train_dataset=dataset,
+        dataset_text_field="text",
+        tokenizer=tokenizer,
+        args=training_args,
+        peft_config=peft_config
+    )
 
-print("\nStarting LoRA Fine-Tuning...")
+print("\nStarting LoRA Fine-Tuning on T4 GPU...")
 trainer.train()
 
 # 7. Save fine-tuned model
