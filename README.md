@@ -1,22 +1,27 @@
-# Serverlex ⚡
-**The Production-Safe Machine Learning Preprocessing, Diagnostics, & Serving Platform**
+# Serverlex 2.0 ⚡
+**The Production-Safe Machine Learning Platform — Now with Built-in AI Copilot**
 
 [![PyPI version](https://img.shields.io/pypi/v/serverlex.svg?color=blue)](https://pypi.org/project/serverlex/)
 [![Python Version](https://img.shields.io/badge/python-3.9%20%7C%203.10%20%7C%203.11%20%7C%203.12-blue.svg)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Tests Passing](https://img.shields.io/badge/tests-47%20passed-brightgreen.svg)](https://github.com/Uwais-ML/Serverlex/actions)
+[![Model on HF](https://img.shields.io/badge/🤗%20Model-Uwais--ML--dev%2Fserverlex--copilot--0.5b-yellow)](https://huggingface.co/Uwais-ML-dev/serverlex-copilot-0.5b)
 [![Code Style](https://img.shields.io/badge/code%20style-production%20safe-green.svg)](https://github.com/Uwais-ML/Serverlex)
 
 ---
 
-**Serverlex** is an end-to-end Python library that takes raw, dirty data and transforms it into model-ready features, baseline benchmarks, tuned algorithms, and live production endpoints. It provides **mathematical leakage protection**, automated **pre-flight data auditing**, **train/serve parity guarantees**, and **cryptographically secured microservice exports**.
+**Serverlex 2.0** is an end-to-end Python library that takes raw, dirty data and transforms it into model-ready features, baseline benchmarks, tuned algorithms, and live production endpoints. It provides **mathematical leakage protection**, automated **pre-flight data auditing**, **train/serve parity guarantees**, **cryptographically secured microservice exports** — and now ships with a built-in **AI Copilot** that auto-diagnoses errors, interprets logs, and generates production pipelines on demand.
+
+> **🆕 What's new in 2.0**: [Serverlex Copilot](#-serverlex-copilot-new-in-20) — a fine-tuned 0.5B LLM embedded directly into the library. Zero API keys. Runs fully offline after first download.
 
 ---
 
 ## 📌 Table of Contents
 
+- [What's New in 2.0](#-whats-new-in-20)
 - [Key Highlights & Guarantees](#-key-highlights--guarantees)
 - [Installation](#-installation)
+- [🤖 Serverlex Copilot (New in 2.0)](#-serverlex-copilot-new-in-20)
 - [Architecture](#-architecture)
 - [60-Second Quickstart](#-60-second-quickstart)
 - [Core Modules & Code Examples](#-core-modules--code-examples)
@@ -34,6 +39,17 @@
 - [Live Inference & Serving Guide](#-live-inference--serving-guide)
 - [Running Tests](#-running-tests)
 - [License](#-license)
+
+---
+
+## ✨ What's New in 2.0
+
+| Feature | Detail |
+|---------|--------|
+| 🤖 **Serverlex Copilot** | Fine-tuned 0.5B LLM embedded into the library. Diagnoses errors, interprets drift logs, generates pipelines. Fully offline after first download. |
+| ⚡ **2.6× Pipeline Speedup** | `HistGradientBoosting` replaces GBM, parallel CV, smarter subsampling in DataGuard. 467s → 178s on the reference benchmark. |
+| 🔒 **Auto Exception Hook** | `enable_auto_copilot()` patches `sys.excepthook` — Copilot automatically explains every unhandled exception. |
+| 📟 **CLI Tool** | `serverlex-copilot diagnose`, `serverlex-copilot generate`, `serverlex-copilot chat` — use the AI from your terminal. |
 
 ---
 
@@ -57,10 +73,94 @@ Install the official package from [PyPI](https://pypi.org/project/serverlex/):
 pip install serverlex
 ```
 
+### Install with AI Copilot (recommended):
+```bash
+pip install "serverlex[copilot]"
+```
+This adds `torch` and `transformers` so the Copilot can run locally. The model (~942 MB) is auto-downloaded from [Hugging Face](https://huggingface.co/Uwais-ML-dev/serverlex-copilot-0.5b) on first use and cached for offline use.
+
 ### Install with Developer Dependencies:
 ```bash
-pip install serverlex[dev]
+pip install "serverlex[dev]"
 ```
+
+---
+
+## 🤖 Serverlex Copilot (New in 2.0)
+
+Serverlex 2.0 ships with a **built-in AI Copilot** — a 0.5B language model fine-tuned on 5,150 Serverlex-specific instruction–response pairs. It runs fully **offline** (no API keys, no cloud, no GPU required) and auto-diagnoses the errors, logs, and patterns unique to Serverlex.
+
+### Install
+```bash
+pip install "serverlex[copilot]"
+```
+
+### Quick Start
+```python
+from serverlex.copilot import get_copilot
+
+cop = get_copilot()  # auto-downloads model on first use, cached after
+
+# Ask anything about Serverlex
+print(cop.ask("Why does DataGuard raise a target proxy warning?"))
+
+# Diagnose a log or error message
+print(cop.diagnose_log("""
+  DataGuardError: Column 'account_id' is 100% unique.
+  PSI alert: feature 'tenure_months' PSI=0.28 (threshold 0.20).
+"""))
+
+# Generate a full production pipeline
+print(cop.generate_pipeline("churn", "Binary classification on telecom data."))
+```
+
+#### Example Response
+```
+DataGuard raises a target proxy warning when a numeric feature has an absolute
+Pearson correlation >= 0.90 with the target column. This indicates the feature
+may be a data-leakage risk — it encodes the target directly rather than a true
+predictor. Fix: drop the column or verify it is not derived from the target.
+
+  guard = DataGuard(df, target_col='churn')
+  guard.run_audit(proxy_threshold=0.90)
+  print(guard.proxy_cols)  # lists flagged columns
+```
+
+### Auto Exception Hook
+```python
+from serverlex.copilot import enable_auto_copilot
+
+enable_auto_copilot()  # one line — Copilot now explains every unhandled exception
+
+# Any error anywhere in your script is automatically diagnosed:
+# ══════════════════════════════════════
+# 🤖 Serverlex Copilot — Auto-Diagnosis
+# ══════════════════════════════════════
+# Root cause: scale_method must be one of: standard, minmax, robust.
+# Fix: pipeline = MLPipeline(scale_method="standard")
+```
+
+### CLI
+```bash
+# Diagnose a log file
+serverlex-copilot diagnose --log error.log
+
+# Generate a pipeline
+serverlex-copilot generate --target churn --description "telecom churn prediction"
+
+# Interactive chat
+serverlex-copilot chat
+```
+
+### Model Details
+| Property | Value |
+|----------|-------|
+| Base model | `Qwen/Qwen2.5-0.5B-Instruct` |
+| Fine-tuned on | 5,150 Serverlex instruction pairs |
+| Training loss | 0.1472 (3 epochs) |
+| Size | ~942 MB (FP16) |
+| HF Hub | [`Uwais-ML-dev/serverlex-copilot-0.5b`](https://huggingface.co/Uwais-ML-dev/serverlex-copilot-0.5b) |
+| Runs on | CPU / MPS (Apple Silicon) / CUDA |
 
 ---
 
