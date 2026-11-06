@@ -131,6 +131,17 @@ class ServerlexCopilot:
 
         logger.info("Loading Serverlex Copilot model on %s …", self.device)
 
+        # Suppress the harmless "temperature/top_p/top_k set but do_sample=False" warnings
+        # that originate from the training-time generation_config.json baked into the model.
+        import warnings
+        import transformers
+        warnings.filterwarnings(
+            "ignore",
+            message=r".*do_sample.*temperature.*|.*do_sample.*top_p.*|.*do_sample.*top_k.*",
+            category=UserWarning,
+            module=r"transformers\.generation\.configuration_utils",
+        )
+
         # --- Tokenizer ---
         tok_kwargs: dict = {"trust_remote_code": False}
         if self.subfolder:
