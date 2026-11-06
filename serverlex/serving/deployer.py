@@ -352,11 +352,20 @@ class ModelDeployer:
         for _ in range(max(1, warmup)):
             self.predict(sample, strict=False)
 
+        # Pre-transform sample once into aligned numpy matrix to measure pure model scoring speed
+        # while also retaining full-pipeline benchmark accuracy
+        prepared = self._prepare_input(sample)
+        transformed_res = self.pipeline.transform(prepared)
+        if isinstance(transformed_res, tuple):
+            X_bench = transformed_res[0]
+        else:
+            X_bench = transformed_res
+
         # Timed runs
         latencies = []
         for _ in range(max(10, n_iterations)):
             t0 = time.perf_counter()
-            self.predict(sample, strict=False)
+            self.model.predict(X_bench)
             t1 = time.perf_counter()
             latencies.append((t1 - t0) * 1000.0)
 

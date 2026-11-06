@@ -64,14 +64,14 @@ class EnsembleBuilder:
 
             if self.task == "classification":
                 kf = StratifiedKFold(n_splits=cv, shuffle=True, random_state=42)
-                acc = cross_val_score(ensemble, X, y, cv=kf, scoring="accuracy")
-                f1 = cross_val_score(ensemble, X, y, cv=kf, scoring="f1_weighted")
+                acc = cross_val_score(ensemble, X, y, cv=kf, scoring="accuracy", n_jobs=-1)
+                f1 = cross_val_score(ensemble, X, y, cv=kf, scoring="f1_weighted", n_jobs=-1)
                 logger.info("Ensemble CV Accuracy: %.4f (+/- %.4f) | F1: %.4f", acc.mean(), acc.std(), f1.mean())
                 return {"Accuracy": round(acc.mean(), 4), "Std_Accuracy": round(acc.std(), 4), "F1": round(f1.mean(), 4)}
             else:
                 kf = KFold(n_splits=cv, shuffle=True, random_state=42)
-                r2 = cross_val_score(ensemble, X, y, cv=kf, scoring="r2")
-                rmse = cross_val_score(ensemble, X, y, cv=kf, scoring="neg_root_mean_squared_error")
+                r2 = cross_val_score(ensemble, X, y, cv=kf, scoring="r2", n_jobs=-1)
+                rmse = cross_val_score(ensemble, X, y, cv=kf, scoring="neg_root_mean_squared_error", n_jobs=-1)
                 logger.info("Ensemble CV R2: %.4f (+/- %.4f) | RMSE: %.4f", r2.mean(), r2.std(), -rmse.mean())
                 return {"R2": round(r2.mean(), 4), "Std_R2": round(r2.std(), 4), "RMSE": round(-rmse.mean(), 4)}
         except Exception as e:

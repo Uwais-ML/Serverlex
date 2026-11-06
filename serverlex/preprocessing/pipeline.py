@@ -7,7 +7,7 @@ from serverlex.preprocessing.clean import Clean
 from sklearn.model_selection import cross_val_score, KFold, StratifiedKFold
 from sklearn.linear_model import LogisticRegression, Ridge
 from sklearn.tree import DecisionTreeClassifier, DecisionTreeRegressor
-from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor, GradientBoostingClassifier, GradientBoostingRegressor
+from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor, GradientBoostingClassifier, GradientBoostingRegressor, HistGradientBoostingClassifier, HistGradientBoostingRegressor
 
 logger=logging.getLogger("Pipeline")
 if not logger.handlers:
@@ -82,7 +82,7 @@ class MLPipeline:
             #    This handles columns read as strings from dirty CSVs (e.g. "9.6 GB", "50 kg", "0,0")
             #    so they are coerced to numeric rather than one-hot encoded as categoricals.
             _UNIT_PAT = r'(?i)\s*(gb|mb|kb|tb|pb|yrs?|years?|months?|days?|hours?|hrs?|mins?|sec|seconds?|%|km|miles?|kg|lbs?)\s*$'
-            _SYM_PAT = r'[₹\$,/€£¥\s]'
+            _SYM_PAT = r'(?i)(?:ksh|usd|eur|gbp|inr|cad|aud|[₹\$,/€£¥\s])'
             _auto_numeric = set(numeric_string_cols or [])
             for col in self.data.select_dtypes(include=['object', 'string']).columns:
                 if self.target and col.strip().lower() == self.target:
@@ -292,7 +292,7 @@ class MLPipeline:
 
             # Clean numeric string columns using saved self.numeric_string_cols
             _UNIT_PAT2 = r'(?i)\s*(gb|mb|kb|tb|pb|yrs?|years?|months?|days?|hours?|hrs?|mins?|sec|seconds?|%|km|miles?|kg|lbs?)\s*$'
-            _SYM_PAT2 = r'[₹\$,/€£¥]'
+            _SYM_PAT2 = r'(?i)(?:ksh|usd|eur|gbp|inr|cad|aud|[₹\$,/€£¥\s])'
             if hasattr(self, 'numeric_string_cols') and self.numeric_string_cols:
                 for col in self.numeric_string_cols:
                     if col in out.columns:
@@ -408,6 +408,7 @@ class MLPipeline:
             # Trustworthy classification detection: check dtype or integer discrete
             is_classification = (
                 y.dtype == 'object'
+                or str(y.dtype).startswith('str')
                 or str(y.dtype).startswith('cat')
                 or str(y.dtype).startswith('bool')
                 or (pd.api.types.is_integer_dtype(y) and y.nunique() <= 20)
@@ -419,10 +420,10 @@ class MLPipeline:
             if is_classification:
                 kf=StratifiedKFold(n_splits=cv, shuffle=True, random_state=42)
                 models={
-                    "Logistic Regression": LogisticRegression(max_iter=1000),
+                    "Logistic Regression": LogisticRegression(max_iter=1000, n_jobs=-1),
                     "Decision Tree": DecisionTreeClassifier(random_state=42),
-                    "Random Forest": RandomForestClassifier(n_estimators=100, random_state=42),
-                    "Gradient Boosting": GradientBoostingClassifier(random_state=42)
+                    "Random Forest": RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=-1),
+                    "Gradient Boosting": HistGradientBoostingClassifier(random_state=42)
                 }
                 models.update(self.custom_models)
 
@@ -430,8 +431,8 @@ class MLPipeline:
                     logger.info("Evaluating %d baseline models (task=%s, cv=%d)", len(models), task, cv)
 
                 for name, model in models.items():
-                    acc_scores=cross_val_score(model, X, y, cv=kf, scoring='accuracy')
-                    f1_scores=cross_val_score(model, X, y, cv=kf, scoring='f1_weighted')
+                    acc_scores=cross_val_score(model, X, y, cv=kf, scoring='accuracy', n_jobs=-1)
+                    f1_scores=cross_val_score(model, X, y, cv=kf, scoring='f1_weighted', n_jobs=-1)
                     results.append({
                         "Model": name,
                         "Accuracy": round(float(acc_scores.mean()), 4),
@@ -442,8 +443,8 @@ class MLPipeline:
                 models={
                     "Ridge Regression": Ridge(),
                     "Decision Tree": DecisionTreeRegressor(random_state=42),
-                    "Random Forest": RandomForestRegressor(n_estimators=100, random_state=42),
-                    "Gradient Boosting": GradientBoostingRegressor(random_state=42)
+                    "Random Forest": RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1),
+                    "Gradient Boosting": HistGradientBoostingRegressor(random_state=42)
                 }
                 models.update(self.custom_models)
 
@@ -451,8 +452,8 @@ class MLPipeline:
                     logger.info("Evaluating %d baseline models (task=%s, cv=%d)", len(models), task, cv)
 
                 for name, model in models.items():
-                    r2_scores=cross_val_score(model, X, y, cv=kf, scoring='r2')
-                    rmse_scores=-cross_val_score(model, X, y, cv=kf, scoring='neg_root_mean_squared_error')
+                    r2_scores=cross_val_score(model, X, y, cv=kf, scoring='r2', n_jobs=-1)
+                    rmse_scores=-cross_val_score(model, X, y, cv=kf, scoring='neg_root_mean_squared_error', n_jobs=-1)
                     results.append({
                         "Model": name,
                         "R2": round(float(r2_scores.mean()), 4),

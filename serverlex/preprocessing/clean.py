@@ -229,7 +229,12 @@ class Clean:
         self.load()
         for col in columns:
             if col in self.data.columns:
-                cleaned = self.data[col].astype(str).str.replace(r"[\$,]", "", regex=True).str.strip()
+                cleaned = (
+                    self.data[col]
+                    .astype(str)
+                    .str.replace(r"[^\d\.\-]", "", regex=True)
+                    .str.strip()
+                )
                 self.data[col] = pd.to_numeric(cleaned, errors="coerce")
         self.separate()
         return self.data

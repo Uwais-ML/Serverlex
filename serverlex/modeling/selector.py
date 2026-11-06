@@ -124,8 +124,15 @@ class FeatureSelector:
             target_enhanced = set()  # features with direct additive target signal
 
             if y is not None:
-                y_series = (pd.to_numeric(y, errors='coerce')
-                            if not isinstance(y, pd.Series) else y)
+                if isinstance(y, pd.Series):
+                    y_series = y
+                else:
+                    y_series = pd.Series(y)
+
+                if y_series.dtype == 'object' or str(y_series.dtype).startswith(('str', 'cat')):
+                    y_num = pd.Series(pd.factorize(y_series)[0], index=y_series.index)
+                else:
+                    y_num = pd.to_numeric(y_series, errors='coerce')
 
                 # Use Mutual Information as the primary ranking metric so that
                 # the absolute-correlation tie between near-identical features
@@ -140,10 +147,10 @@ class FeatureSelector:
                 except Exception:
                     # Fallback: absolute Pearson correlation
                     for col in num_cols:
-                        valid = df[col].notna() & y_series.notna()
+                        valid = df[col].notna() & y_num.notna()
                         if valid.sum() > 5:
                             cv = float(np.corrcoef(df[col][valid],
-                                                   y_series[valid])[0, 1])
+                                                   y_num[valid])[0, 1])
                             y_scores[col] = abs(cv) if not np.isnan(cv) else 0.0
                         else:
                             y_scores[col] = 0.0
@@ -160,10 +167,10 @@ class FeatureSelector:
                         diff = df[c2] - df[c1]
                         if diff.std() < 1e-6:
                             continue
-                        valid = diff.notna() & y_series.notna()
+                        valid = diff.notna() & y_num.notna()
                         if valid.sum() > 5:
                             dc = float(np.corrcoef(
-                                diff[valid], y_series[valid])[0, 1])
+                                diff[valid], y_num[valid])[0, 1])
                             # Only positive direction: c2 has additive y signal
                             if not np.isnan(dc) and dc > 0.90:
                                 target_enhanced.add(c2)

@@ -44,3 +44,7 @@ env/
 *.png
 test_output/
 scratch/
+experiments/outputs/
+netflix_titles.csv
+customers.csv
+dataset/

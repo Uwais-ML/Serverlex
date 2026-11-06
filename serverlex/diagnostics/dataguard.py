@@ -42,16 +42,20 @@ class DataGuard:
     def _get_numeric_coerced_df(self):
         """Helper to coerce numeric-majority object columns so audit checks are not blinded by string dtypes."""
         _UNIT_PAT = r'(?i)\s*(gb|mb|kb|tb|pb|yrs?|years?|months?|days?|hours?|hrs?|mins?|sec|seconds?|%|km|miles?|kg|lbs?)\s*$'
-        _SYM_PAT = r'[₹\$,/€£¥\s]'
+        _SYM_PAT = r'(?i)(?:ksh|usd|eur|gbp|inr|cad|aud|[₹\$,/€£¥\s])'
         df_coerced = self.data.copy()
-        for col in df_coerced.select_dtypes(include=['object', 'string']).columns:
-            sample = df_coerced[col].dropna().astype(str).str.strip()
+        # Fast sample for detection if data is large
+        sample_df = self.data.sample(min(len(self.data), 2000), random_state=42) if len(self.data) > 2000 else self.data
+        for col in sample_df.select_dtypes(include=['object', 'string']).columns:
+            sample = sample_df[col].dropna().astype(str).str.strip()
             if sample.empty or len(sample) < 5:
                 continue
             cleaned = sample.str.replace(_UNIT_PAT, '', regex=True).str.replace(_SYM_PAT, '', regex=True).str.replace(',', '.', regex=False).str.strip()
             coerced = pd.to_numeric(cleaned, errors='coerce')
             if coerced.notna().mean() >= 0.70:
-                df_coerced[col] = coerced
+                # Apply coercion to full column
+                full_cleaned = df_coerced[col].astype(str).str.replace(_UNIT_PAT, '', regex=True).str.replace(_SYM_PAT, '', regex=True).str.replace(',', '.', regex=False).str.strip()
+                df_coerced[col] = pd.to_numeric(full_cleaned, errors='coerce')
         return df_coerced
 
     # 1. Detect ID Columns

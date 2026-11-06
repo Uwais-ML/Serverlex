@@ -64,7 +64,10 @@ class ModelEvaluator:
                 plt.savefig(save_path)
                 plt.close(fig)
             else:
-                plt.show()
+                if not plt.isinteractive():
+                    plt.close(fig)
+                else:
+                    plt.show()
             return cm
         except Exception as e:
             logger.error("Error in plot_confusion_matrix: %s", e)
@@ -92,7 +95,9 @@ class ModelEvaluator:
                 ax.set_title(f"{title} (Macro Avg AUC = {roc_auc:.4f})", fontsize=12, fontweight="bold")
             else:
                 prob_vec = y_prob_arr[:, 1] if (y_prob_arr.ndim > 1 and y_prob_arr.shape[1] == 2) else y_prob_arr
-                fpr, tpr, _ = roc_curve(y_true_arr, prob_vec)
+                classes = np.unique(y_true_arr)
+                pos_label = classes[1] if len(classes) == 2 else None
+                fpr, tpr, _ = roc_curve(y_true_arr, prob_vec, pos_label=pos_label)
                 roc_auc = float(auc(fpr, tpr))
                 ax.plot(fpr, tpr, color="darkorange", lw=2, label=f"ROC (AUC = {roc_auc:.4f})")
                 ax.plot([0, 1], [0, 1], color="navy", lw=1.5, linestyle="--")
@@ -109,7 +114,10 @@ class ModelEvaluator:
                 plt.savefig(save_path)
                 plt.close(fig)
             else:
-                plt.show()
+                if not plt.isinteractive():
+                    plt.close(fig)
+                else:
+                    plt.show()
             logger.info("ROC-AUC score: %.4f", roc_auc)
             return roc_auc
         except Exception as e:
@@ -118,7 +126,12 @@ class ModelEvaluator:
 
     def plot_precision_recall(self, y_true, y_prob, title="Precision-Recall Curve", save_path=None):
         try:
-            precision, recall, _ = precision_recall_curve(y_true, y_prob)
+            y_true_arr = np.asarray(y_true)
+            y_prob_arr = np.asarray(y_prob)
+            prob_vec = y_prob_arr[:, 1] if (y_prob_arr.ndim > 1 and y_prob_arr.shape[1] == 2) else y_prob_arr
+            classes = np.unique(y_true_arr)
+            pos_label = classes[1] if len(classes) == 2 else None
+            precision, recall, _ = precision_recall_curve(y_true_arr, prob_vec, pos_label=pos_label)
             fig, ax=plt.subplots(figsize=(6, 5))
             ax.plot(recall, precision, color="purple", lw=2)
             ax.set_xlabel("Recall")
@@ -130,7 +143,10 @@ class ModelEvaluator:
                 plt.savefig(save_path)
                 plt.close(fig)
             else:
-                plt.show()
+                if not plt.isinteractive():
+                    plt.close(fig)
+                else:
+                    plt.show()
         except Exception as e:
             logger.error("Error in plot_precision_recall: %s", e)
             raise
