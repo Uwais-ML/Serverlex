@@ -2,6 +2,13 @@
 
 All notable changes to Serverlex are documented here.
 
+## [1.3.2] — 2026-11-06
+
+### Documentation & Packaging
+- **Comprehensive PyPI Documentation**: Expanded the PyPI package landing page with in-depth module-by-module code recipes, usage guides, architecture diagrams, and runnable end-to-end examples for all 11 Serverlex modules.
+- Added detailed usage examples for `DataGuard`, `Clean`, `MLPipeline`, `FeatureSelector`, `ModelDeployer`, `ModelEvaluator`, `ModelExplainer`, `DriftDetector`, `ModelHyperparameter`, `EnsembleBuilder`, and `Visualize`.
+- Added production serving guide for live inference with `strict=True/False`, custom probability thresholds, and HMAC authentication.
+
 ## [1.3.1] — 2026-11-06
 
 ### Fixed

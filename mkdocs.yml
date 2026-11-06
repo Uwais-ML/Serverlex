@@ -1,0 +1,56 @@
+site_name: Serverlex
+site_description: The Production-Safe Machine Learning Preprocessing, Diagnostics, & Serving Platform
+site_url: https://uwais-ml.github.io/Serverlex/
+repo_url: https://github.com/Uwais-ML/Serverlex
+repo_name: Uwais-ML/Serverlex
+
+theme:
+  name: material
+  language: en
+  palette:
+    - scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.top
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+
+nav:
+  - Home: index.md
+  - Quickstart: quickstart.md
+  - Guides:
+      - Pre-Flight Auditing: guides/dataguard.md
+      - Data Sanitization: guides/cleaning.md
+      - Leak-Free Pipeline: guides/pipeline.md
+      - Collinear Feature Pruning: guides/feature-selection.md
+      - Live Serving & API Export: guides/serving.md
+      - Model Evaluation: guides/evaluation.md
+      - Permutation Explainability: guides/explainability.md
+      - Production Drift Detection: guides/drift.md
+      - Hyperparameter Tuning: guides/tuning.md
+      - Ensembles: guides/ensembles.md
+      - Server-Safe EDA: guides/visualization.md
+  - API Reference: api-reference.md
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - tables
+  - attr_list
