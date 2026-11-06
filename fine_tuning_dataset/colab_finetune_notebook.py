@@ -1,15 +1,26 @@
 """
 Fine-Tuning a 0.5B Model on Serverlex
 Automated script for Google Colab (T4 GPU recommended).
-Compatible with latest trl, transformers, and peft.
+Bypasses torchao bugs and uses native standard PyTorch + Hugging Face Trainer.
 """
 import os
+import sys
 import json
 import torch
+
+# Workaround for Colab peft/torchao compatibility bug
+os.environ["USE_TORCHAO"] = "0"
+sys.modules["torchao"] = None
+
 from datasets import Dataset
-from transformers import AutoTokenizer, AutoModelForCausalLM, TrainingArguments
+from transformers import (
+    AutoTokenizer,
+    AutoModelForCausalLM,
+    TrainingArguments,
+    Trainer,
+    DataCollatorForSeq2Seq
+)
 from peft import LoraConfig, get_peft_model
-from trl import SFTTrainer, SFTConfig
 
 # 1. Determine dataset path
 script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -59,7 +70,6 @@ tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
 if tokenizer.pad_token is None:
     tokenizer.pad_token = tokenizer.eos_token
 
-# Pre-tokenize dataset to ensure universal compatibility across TRL versions
 def tokenize_fn(batch):
     tokens = tokenizer(
         batch["text"],
@@ -73,13 +83,16 @@ def tokenize_fn(batch):
 print("Tokenizing dataset...")
 tokenized_dataset = dataset.map(tokenize_fn, batched=True, remove_columns=["text"])
 
-model = AutoModelForCausalLM.from_pretrained(
+device = "cuda" if torch.cuda.is_available() else "cpu"
+dtype = torch.bfloat16 if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else torch.float16
+
+base_model = AutoModelForCausalLM.from_pretrained(
     MODEL_ID,
-    torch_dtype=torch.bfloat16 if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else torch.float16,
-    device_map="auto" if torch.cuda.is_available() else None
+    torch_dtype=dtype,
+    device_map="auto" if device == "cuda" else None
 )
 
-# 4. LoRA Adapter configuration
+# 4. Standard LoRA Configuration
 peft_config = LoraConfig(
     r=16,
     lora_alpha=32,
@@ -89,55 +102,33 @@ peft_config = LoraConfig(
     target_modules=["q_proj", "k_proj", "v_proj", "o_proj"]
 )
 
-# 5. Training arguments (universal across new & old TRL / Transformers)
-try:
-    # Latest TRL uses SFTConfig
-    training_args = SFTConfig(
-        output_dir="./serverlex-0.5b-checkpoints",
-        per_device_train_batch_size=4,
-        gradient_accumulation_steps=4,
-        learning_rate=2e-4,
-        lr_scheduler_type="cosine",
-        num_train_epochs=3,
-        logging_steps=20,
-        save_strategy="epoch",
-        max_seq_length=1024,
-        fp16=torch.cuda.is_available() and not torch.cuda.is_bf16_supported(),
-        bf16=torch.cuda.is_available() and torch.cuda.is_bf16_supported(),
-        report_to="none"
-    )
-except Exception:
-    training_args = TrainingArguments(
-        output_dir="./serverlex-0.5b-checkpoints",
-        per_device_train_batch_size=4,
-        gradient_accumulation_steps=4,
-        learning_rate=2e-4,
-        lr_scheduler_type="cosine",
-        num_train_epochs=3,
-        logging_steps=20,
-        save_strategy="epoch",
-        fp16=torch.cuda.is_available() and not torch.cuda.is_bf16_supported(),
-        bf16=torch.cuda.is_available() and torch.cuda.is_bf16_supported(),
-        report_to="none"
-    )
+model = get_peft_model(base_model, peft_config)
+model.print_trainable_parameters()
 
-# 6. SFT Trainer
-try:
-    trainer = SFTTrainer(
-        model=model,
-        train_dataset=tokenized_dataset,
-        args=training_args,
-        peft_config=peft_config
-    )
-except TypeError:
-    trainer = SFTTrainer(
-        model=model,
-        train_dataset=dataset,
-        dataset_text_field="text",
-        tokenizer=tokenizer,
-        args=training_args,
-        peft_config=peft_config
-    )
+# 5. Training arguments using standard Hugging Face Trainer (robust & dependency-free)
+training_args = TrainingArguments(
+    output_dir="./serverlex-0.5b-checkpoints",
+    per_device_train_batch_size=4,
+    gradient_accumulation_steps=4,
+    learning_rate=2e-4,
+    lr_scheduler_type="cosine",
+    num_train_epochs=3,
+    logging_steps=20,
+    save_strategy="epoch",
+    fp16=(device == "cuda" and not torch.cuda.is_bf16_supported()),
+    bf16=(device == "cuda" and torch.cuda.is_bf16_supported()),
+    report_to="none"
+)
+
+# 6. Standard Trainer with DataCollator
+collator = DataCollatorForSeq2Seq(tokenizer=tokenizer, pad_to_multiple_of=8, return_tensors="pt")
+
+trainer = Trainer(
+    model=model,
+    train_dataset=tokenized_dataset,
+    args=training_args,
+    data_collator=collator
+)
 
 print("\nStarting LoRA Fine-Tuning on T4 GPU...")
 trainer.train()
@@ -155,8 +146,8 @@ def ask_serverlex_expert(instruction, error_log=""):
     else:
         prompt = f"### Instruction:\n{instruction}\n\n### Response:\n"
 
-    device = model.device
-    inputs = tokenizer(prompt, return_tensors="pt").to(device)
+    dev = model.device
+    inputs = tokenizer(prompt, return_tensors="pt").to(dev)
     with torch.no_grad():
         outputs = model.generate(**inputs, max_new_tokens=350, temperature=0.2)
     return tokenizer.decode(outputs[0][len(inputs.input_ids[0]):], skip_special_tokens=True)
