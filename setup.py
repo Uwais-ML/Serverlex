@@ -28,7 +28,14 @@ setup(
         "joblib>=1.3.0",
     ],
     extras_require={
-        "copilot": ["torch>=2.0.0", "transformers>=4.40.0", "accelerate>=0.26.0"]
+        "copilot": ["torch>=2.0.0", "transformers>=4.40.0", "accelerate>=0.26.0"],
+        "dev": [
+            "pytest>=7.0",
+            "pytest-cov>=4.0",
+            "ruff>=0.4.0",
+            "twine>=5.0",
+            "build>=1.0",
+        ],
     },
     entry_points={
         "console_scripts": [
