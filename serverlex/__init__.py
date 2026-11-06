@@ -10,6 +10,7 @@ from serverlex.modeling.selector import FeatureSelector
 from serverlex.visualization.eda import Visualize
 from serverlex.serving.deployer import ModelDeployer
 from serverlex.copilot.agent import ServerlexCopilot, get_copilot
+from serverlex.copilot.hook import enable_auto_copilot, disable_auto_copilot
 
 __all__ = [
     "Clean",
@@ -25,6 +26,8 @@ __all__ = [
     "ModelDeployer",
     "ServerlexCopilot",
     "get_copilot",
+    "enable_auto_copilot",
+    "disable_auto_copilot",
 ]
 
 __version__ = "1.3.3"
