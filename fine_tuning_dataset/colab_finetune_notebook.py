@@ -1,31 +1,35 @@
-# Fine-Tuning a 0.5B Model on Serverlex (Google Colab Notebook)
-
-Run the cells below in Google Colab (select a free T4 GPU under `Runtime > Change runtime type`).
-
----
-
-### Step 1: Install Required Libraries
-```bash
-!pip install -q torch transformers datasets trl peft accelerate bitsandbytes serverlex
-```
-
----
-
-### Step 2: Load the Dataset and Format Prompt
-```python
+"""
+Fine-Tuning a 0.5B Model on Serverlex
+Automated script for Google Colab (T4 GPU recommended).
+"""
+import os
 import json
+import torch
 from datasets import Dataset
+from transformers import AutoTokenizer, AutoModelForCausalLM, TrainingArguments
+from peft import LoraConfig
+from trl import SFTTrainer
 
-# Load the Serverlex instruction dataset
-with open("serverlex_instruct_dataset.json", "r") as f:
+# 1. Determine dataset path
+script_dir = os.path.dirname(os.path.abspath(__file__))
+dataset_path = os.path.join(script_dir, "serverlex_instruct_dataset.json")
+
+if not os.path.exists(dataset_path):
+    dataset_path = "serverlex_instruct_dataset.json"
+
+if not os.path.exists(dataset_path):
+    raise FileNotFoundError(f"Could not locate dataset at '{dataset_path}'")
+
+print(f"Loading dataset from: {dataset_path}")
+with open(dataset_path, "r", encoding="utf-8") as f:
     raw_data = json.load(f)
 
-# Convert to Alpaca / Chat template
-def format_prompts(batch):
+# 2. Format into instruction-tuning prompt template
+def format_prompts(data):
     formatted = []
-    for item in batch:
-        if item.get("input"):
-            prompt = f"""### Instruction:
+    for item in data:
+        if item.get("input") and str(item["input"]).strip():
+            text = f"""### Instruction:
 {item['instruction']}
 
 ### Input:
@@ -34,40 +38,33 @@ def format_prompts(batch):
 ### Response:
 {item['output']}"""
         else:
-            prompt = f"""### Instruction:
+            text = f"""### Instruction:
 {item['instruction']}
 
 ### Response:
 {item['output']}"""
-        formatted.append({"text": prompt})
+        formatted.append({"text": text})
     return formatted
 
-dataset = Dataset.from_list(format_prompts(raw_data))
-print(f"Loaded {len(dataset)} training examples")
-print(dataset[0]["text"][:250])
-```
+formatted_data = format_prompts(raw_data)
+dataset = Dataset.from_list(formatted_data)
+print(f"Loaded {len(dataset)} training examples.")
 
----
-
-### Step 3: Load 0.5B Model (e.g. Qwen2.5-0.5B or SmolLM-360M/0.5B)
-```python
-import torch
-from transformers import AutoTokenizer, AutoModelForCausalLM, TrainingArguments
-from peft import LoraConfig, get_peft_model
-from trl import SFTTrainer
-
-MODEL_ID = "Qwen/Qwen2.5-0.5B-Instruct"  # High performance 0.5B model
+# 3. Model & Tokenizer setup
+MODEL_ID = "Qwen/Qwen2.5-0.5B-Instruct"
+print(f"Loading base model: {MODEL_ID}")
 
 tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
-tokenizer.pad_token = tokenizer.eos_token
+if tokenizer.pad_token is None:
+    tokenizer.pad_token = tokenizer.eos_token
 
 model = AutoModelForCausalLM.from_pretrained(
     MODEL_ID,
-    torch_dtype=torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16,
-    device_map="auto"
+    torch_dtype=torch.bfloat16 if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else torch.float16,
+    device_map="auto" if torch.cuda.is_available() else None
 )
 
-# Apply LoRA for fast, lightweight fine-tuning
+# 4. LoRA Adapter configuration
 peft_config = LoraConfig(
     r=16,
     lora_alpha=32,
@@ -76,26 +73,23 @@ peft_config = LoraConfig(
     task_type="CAUSAL_LM",
     target_modules=["q_proj", "k_proj", "v_proj", "o_proj"]
 )
-```
 
----
-
-### Step 4: Run SFT Training
-```python
+# 5. Training arguments
 training_args = TrainingArguments(
-    output_dir="./serverlex-0.5b-expert",
-    per_device_train_batch_size=2,
+    output_dir="./serverlex-0.5b-checkpoints",
+    per_device_train_batch_size=4,
     gradient_accumulation_steps=4,
     learning_rate=2e-4,
     lr_scheduler_type="cosine",
-    num_train_epochs=5,
-    logging_steps=5,
+    num_train_epochs=3,
+    logging_steps=20,
     save_strategy="epoch",
-    fp16=not torch.cuda.is_bf16_supported(),
-    bf16=torch.cuda.is_bf16_supported(),
+    fp16=torch.cuda.is_available() and not torch.cuda.is_bf16_supported(),
+    bf16=torch.cuda.is_available() and torch.cuda.is_bf16_supported(),
     report_to="none"
 )
 
+# 6. SFT Trainer
 trainer = SFTTrainer(
     model=model,
     train_dataset=dataset,
@@ -106,28 +100,29 @@ trainer = SFTTrainer(
     peft_config=peft_config
 )
 
+print("\nStarting LoRA Fine-Tuning...")
 trainer.train()
-trainer.model.save_pretrained("./serverlex-0.5b-final")
-tokenizer.save_pretrained("./serverlex-0.5b-final")
-print("✅ Fine-tuning completed and saved to ./serverlex-0.5b-final")
-```
 
----
+# 7. Save fine-tuned model
+OUTPUT_DIR = "./serverlex-0.5b-final"
+trainer.model.save_pretrained(OUTPUT_DIR)
+tokenizer.save_pretrained(OUTPUT_DIR)
+print(f"\nModel fine-tuning complete! Saved weights to: {OUTPUT_DIR}")
 
-### Step 5: Test the Fine-Tuned Model on Serverlex Logs
-```python
+# 8. Interactive inference helper
 def ask_serverlex_expert(instruction, error_log=""):
     if error_log:
         prompt = f"### Instruction:\n{instruction}\n\n### Input:\n{error_log}\n\n### Response:\n"
     else:
         prompt = f"### Instruction:\n{instruction}\n\n### Response:\n"
-        
-    inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
+
+    device = model.device
+    inputs = tokenizer(prompt, return_tensors="pt").to(device)
     with torch.no_grad():
-        outputs = model.generate(**inputs, max_new_tokens=400, temperature=0.2)
+        outputs = model.generate(**inputs, max_new_tokens=350, temperature=0.2)
     return tokenizer.decode(outputs[0][len(inputs.input_ids[0]):], skip_special_tokens=True)
 
-# Test diagnosis with a log
+# Sample test run
 sample_log = "ValueError: Bundle authenticity verification failed! HMAC mismatch for 'cancer_triage_bundle.joblib'"
-print(ask_serverlex_expert("Analyze this Serverlex log and output the fix.", sample_log))
-```
+print("\n--- Test Model Diagnosis on Serverlex Log ---")
+print(ask_serverlex_expert("Analyze this Serverlex error and provide the fix.", sample_log))
