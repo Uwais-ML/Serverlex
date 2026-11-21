@@ -44,6 +44,7 @@ env/
 *.png
 test_output/
 serverlex/copilot/model/
+serverlex/copilot/model_int4/
 *.safetensors
 serverlex_copilot_model/
 serverlex-0.5b-merged.zip
