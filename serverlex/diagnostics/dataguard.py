@@ -3,6 +3,12 @@ import pandas as pd
 import numpy as np
 import re
 
+# Native C++ acceleration (optional, falls back gracefully)
+try:
+    from serverlex._native import corr_pairs_from_df as _corr_pairs_from_df
+except ImportError:
+    _corr_pairs_from_df = None
+
 logger=logging.getLogger("DataGuard")
 if not logger.handlers:
     _h=logging.StreamHandler()
@@ -251,14 +257,19 @@ class DataGuard:
             if len(num_cols) < 2:
                 return []
 
-            corr_matrix = df_coerced[num_cols].corr().abs()
-            for i in range(len(num_cols)):
-                for j in range(i + 1, len(num_cols)):
-                    col_a, col_b = num_cols[i], num_cols[j]
-                    r_val = corr_matrix.loc[col_a, col_b]
-                    if not np.isnan(r_val) and r_val >= threshold:
-                        self.collinear_pairs.append((col_a, col_b, round(float(r_val), 4)))
-                        logger.warning("Collinear features detected: '%s' and '%s' (|r| = %.4f >= %.2f)", col_a, col_b, r_val, threshold)
+            if _corr_pairs_from_df is not None:
+                self.collinear_pairs = _corr_pairs_from_df(df_coerced, num_cols, threshold=threshold)
+                for col_a, col_b, r_val in self.collinear_pairs:
+                    logger.warning("Collinear features detected: '%s' and '%s' (|r| = %.4f >= %.2f)", col_a, col_b, r_val, threshold)
+            else:
+                corr_matrix = df_coerced[num_cols].corr().abs()
+                for i in range(len(num_cols)):
+                    for j in range(i + 1, len(num_cols)):
+                        col_a, col_b = num_cols[i], num_cols[j]
+                        r_val = corr_matrix.loc[col_a, col_b]
+                        if not np.isnan(r_val) and r_val >= threshold:
+                            self.collinear_pairs.append((col_a, col_b, round(float(r_val), 4)))
+                            logger.warning("Collinear features detected: '%s' and '%s' (|r| = %.4f >= %.2f)", col_a, col_b, r_val, threshold)
 
             if self.collinear_pairs:
                 self.warnings.append({

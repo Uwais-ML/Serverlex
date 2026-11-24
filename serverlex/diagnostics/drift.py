@@ -3,6 +3,13 @@ import pandas as pd
 import numpy as np
 from scipy.stats import ks_2samp, chi2_contingency, wasserstein_distance
 
+# Native C++ PSI kernel (optional — falls back to pure Python automatically)
+try:
+    from serverlex._native import psi_from_dataframes as _psi_from_df, NATIVE_AVAILABLE as _NATIVE
+except ImportError:
+    _psi_from_df = None
+    _NATIVE = False
+
 logger=logging.getLogger("DriftDetector")
 if not logger.handlers:
     _h=logging.StreamHandler()
@@ -86,6 +93,28 @@ class DriftDetector:
             common_cols = [c for c in ref_cols if c in cur_cols]
             logger.info("Running drift detection across %d features (alpha=%.3f, psi_threshold=%.2f)", len(ref_cols), self.alpha, self.psi_threshold)
 
+            # ── Fast path: batch PSI for all numeric columns in one C++ call ──
+            # psi_cache maps col → PSI score; falls back to per-column Python
+            # inside the loop when the native extension is not available.
+            _psi_cache: dict = {}
+            if _NATIVE and _psi_from_df is not None:
+                try:
+                    num_common = [
+                        c for c in common_cols
+                        if pd.api.types.is_numeric_dtype(self.ref_data[c])
+                        and pd.api.types.is_numeric_dtype(cur_data[c])
+                    ]
+                    if num_common:
+                        _psi_cache = _psi_from_df(
+                            self.ref_data, cur_data, columns=num_common, num_bins=10
+                        )
+                        logger.debug(
+                            "Native PSI batch computed for %d numeric column(s)", len(num_common)
+                        )
+                except Exception as _e:
+                    logger.debug("Native PSI batch failed (%s) — falling back to Python", _e)
+                    _psi_cache = {}
+
             for col in common_cols:
                 ref_series = self.ref_data[col].dropna()
                 cur_series = cur_data[col].dropna()
@@ -118,7 +147,8 @@ class DriftDetector:
                     cur_vals = cur_series
 
                     stat, p_val = ks_2samp(ref_vals, cur_vals)
-                    psi = self.calculate_psi(ref_vals, cur_vals)
+                    # Use pre-computed C++ batch PSI if available, else Python fallback
+                    psi = _psi_cache.get(col, self.calculate_psi(ref_vals, cur_vals))
                     w_dist = float(np.round(wasserstein_distance(ref_vals, cur_vals), 4))
 
                     # Guard against small sample noise: Reliable drift analysis requires sample size >= 50

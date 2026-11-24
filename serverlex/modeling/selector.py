@@ -2,6 +2,12 @@ import logging
 import pandas as pd
 import numpy as np
 
+# Native C++ acceleration (optional, falls back gracefully)
+try:
+    from serverlex._native import corr_filter_pairs as _corr_filter_pairs
+except ImportError:
+    _corr_filter_pairs = None
+
 from sklearn.feature_selection import (
     mutual_info_classif,
     mutual_info_regression,
@@ -179,13 +185,20 @@ class FeatureSelector:
             # Step 2: Build collinearity graph (undirected)                      #
             # ------------------------------------------------------------------ #
             adj = {c: set() for c in num_cols}
-            for i in range(len(num_cols)):
-                for j in range(i + 1, len(num_cols)):
+            if _corr_filter_pairs is not None:
+                pairs = _corr_filter_pairs(corr_matrix.to_numpy(dtype=np.float64), threshold)
+                for i, j, _ in pairs:
                     c1, c2 = num_cols[i], num_cols[j]
-                    r = corr_matrix.loc[c1, c2]
-                    if not np.isnan(r) and r >= threshold:
-                        adj[c1].add(c2)
-                        adj[c2].add(c1)
+                    adj[c1].add(c2)
+                    adj[c2].add(c1)
+            else:
+                for i in range(len(num_cols)):
+                    for j in range(i + 1, len(num_cols)):
+                        c1, c2 = num_cols[i], num_cols[j]
+                        r = corr_matrix.loc[c1, c2]
+                        if not np.isnan(r) and r >= threshold:
+                            adj[c1].add(c2)
+                            adj[c2].add(c1)
 
             # ------------------------------------------------------------------ #
             # Step 3: Connected-component clustering; keep ONE rep per cluster   #
