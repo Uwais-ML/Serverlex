@@ -57,7 +57,7 @@ ext_modules = [
 
 setup(
     name="serverlex",
-    version="2.0.0",
+    version="2.1.0",
     author="Serverlex Team",
     description="Production-Safe ML Preprocessing, Diagnostics, Tuning, and Serving Platform",
     long_description=long_description,
