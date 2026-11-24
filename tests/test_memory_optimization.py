@@ -44,7 +44,7 @@ def test_clean_total_clean_with_optimize_memory():
     cleaner = Clean(df)
     cleaned = cleaner.total_clean(optimize_memory=True)
 
-    assert cleaned["age"].dtype == np.int8
+    assert cleaned["age"].dtype in [np.int8, np.uint8]
     assert cleaned["salary"].dtype == np.float32
 
 
@@ -61,3 +61,39 @@ def test_mlpipeline_optimize_memory():
     # Output features should be float32 instead of float64
     for col in X.select_dtypes(include='number').columns:
         assert X[col].dtype == np.float32 or X[col].dtype in [np.int8, np.int16, np.int32]
+
+
+def test_clean_load_chunked(tmp_path):
+    csv_file = tmp_path / "test_chunked.csv"
+    N = 5000
+    df = pd.DataFrame({
+        "id": np.arange(N, dtype=np.int64),
+        "score": np.random.randn(N).astype(np.float64),
+        "category": ["A", "B", "C", "D", "E"] * (N // 5)
+    })
+    df.to_csv(csv_file, index=False)
+
+    cleaner = Clean(str(csv_file))
+    loaded_df = cleaner.load_chunked(chunksize=1000, downcast_numeric=True, auto_categorical=True)
+
+    assert len(loaded_df) == N
+    assert loaded_df["score"].dtype == np.float32
+    assert loaded_df["id"].dtype in [np.int16, np.uint16, np.int32, np.uint32]
+    assert isinstance(loaded_df["category"].dtype, pd.CategoricalDtype)
+
+
+def test_clean_load_chunked_quantize_8bit(tmp_path):
+    csv_file = tmp_path / "test_quant.csv"
+    N = 2000
+    df = pd.DataFrame({
+        "continuous_val": np.linspace(0.0, 100.0, N, dtype=np.float64)
+    })
+    df.to_csv(csv_file, index=False)
+
+    cleaner = Clean(str(csv_file))
+    loaded_df = cleaner.load_chunked(chunksize=500, quantize_8bit=True)
+
+    assert len(loaded_df) == N
+    assert loaded_df["continuous_val"].dtype == np.uint8
+    assert loaded_df["continuous_val"].min() == 0
+    assert loaded_df["continuous_val"].max() == 255

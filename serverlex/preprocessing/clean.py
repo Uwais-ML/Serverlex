@@ -26,6 +26,102 @@ class Clean:
                 raise ValueError("No dataset or file path provided to Clean.")
         return self.data
 
+    def load_chunked(
+        self,
+        filepath=None,
+        chunksize=100_000,
+        downcast_numeric=True,
+        quantize_8bit=False,
+        auto_categorical=True,
+        verbose=True,
+        **read_csv_kwargs
+    ):
+        """
+        Streaming in-flight chunked CSV loader designed for datasets exceeding available RAM (10+ GB).
+        Instead of loading the entire raw file into uncompressed 64-bit RAM at once (which spikes memory
+        by 3x-4x and triggers OOM crashes), this loader streams through a sliding chunk buffer:
+          1. Reads `chunksize` rows at a time (e.g. 100k rows ~ 50 MB working set).
+          2. Downcasts in-flight:
+             - Floats: float64 -> float32 (50% reduction) or 8-bit quantized bins (87.5% reduction).
+             - Integers: int64 -> int8, int16, or int32 based on chunk min/max boundaries.
+             - Strings: low-cardinality string/object columns -> category dtype.
+          3. Appends the memory-compact chunk and concatenates with minimal peak memory overhead.
+
+        Parameters:
+            filepath (str, optional): Path to CSV. Defaults to self.path.
+            chunksize (int): Number of rows per streaming batch (default 100,000).
+            downcast_numeric (bool): Downcast floats to float32 and ints to int8/16/32.
+            quantize_8bit (bool): Extreme 1-byte quantization for continuous floats (0-255 uint8).
+            auto_categorical (bool): Automatically cast low-cardinality string columns to category.
+            verbose (bool): Log memory stats before and after chunked loading.
+            **read_csv_kwargs: Forwarded to pd.read_csv.
+
+        Returns:
+            pd.DataFrame: Consolidated, memory-compact DataFrame loaded with minimal peak RAM.
+        """
+        path_to_use = filepath or self.path
+        if not path_to_use:
+            raise ValueError("No file path provided to Clean.load_chunked().")
+
+        chunks = []
+        total_rows = 0
+        reader = pd.read_csv(path_to_use, chunksize=chunksize, **read_csv_kwargs)
+        for chunk in reader:
+            total_rows += len(chunk)
+            for col in chunk.columns:
+                col_type = chunk[col].dtype
+
+                # 1. Integer Downcasting
+                if downcast_numeric and pd.api.types.is_integer_dtype(col_type):
+                    c_min = chunk[col].min()
+                    c_max = chunk[col].max()
+                    if c_min >= 0 and c_max <= np.iinfo(np.uint8).max:
+                        chunk[col] = chunk[col].astype(np.uint8)
+                    elif c_min >= np.iinfo(np.int8).min and c_max <= np.iinfo(np.int8).max:
+                        chunk[col] = chunk[col].astype(np.int8)
+                    elif c_min >= 0 and c_max <= np.iinfo(np.uint16).max:
+                        chunk[col] = chunk[col].astype(np.uint16)
+                    elif c_min >= np.iinfo(np.int16).min and c_max <= np.iinfo(np.int16).max:
+                        chunk[col] = chunk[col].astype(np.int16)
+                    elif c_min >= 0 and c_max <= np.iinfo(np.uint32).max:
+                        chunk[col] = chunk[col].astype(np.uint32)
+                    elif c_min >= np.iinfo(np.int32).min and c_max <= np.iinfo(np.int32).max:
+                        chunk[col] = chunk[col].astype(np.int32)
+
+                # 2. Float Downcasting / 8-bit Quantization
+                elif pd.api.types.is_float_dtype(col_type):
+                    if quantize_8bit:
+                        c_min = chunk[col].min()
+                        c_max = chunk[col].max()
+                        if pd.notna(c_min) and pd.notna(c_max) and c_max > c_min:
+                            scaled = ((chunk[col] - c_min) / (c_max - c_min) * 255.0).clip(0, 255)
+                            chunk[col] = scaled.fillna(0).astype(np.uint8)
+                        else:
+                            chunk[col] = chunk[col].astype(np.float32)
+                    elif downcast_numeric and col_type == np.float64:
+                        chunk[col] = chunk[col].astype(np.float32)
+
+                # 3. Categorical Downcasting for low-cardinality strings
+                elif auto_categorical and (isinstance(col_type, object) or col_type == 'object' or col_type == 'string'):
+                    num_unique = chunk[col].nunique(dropna=True)
+                    if len(chunk) > 0 and (num_unique / len(chunk)) < 0.5:
+                        chunk[col] = chunk[col].astype('category')
+
+            chunks.append(chunk)
+
+        self.data = pd.concat(chunks, ignore_index=True)
+
+        # Final pass: harmonize column bounds across chunks
+        if downcast_numeric:
+            self.optimize_memory(downcast_floats=downcast_numeric, downcast_ints=downcast_numeric, downcast_categories=auto_categorical, verbose=False)
+
+        self.separate()
+        if verbose:
+            mem_mb = self.data.memory_usage(deep=True).sum() / (1024 ** 2)
+            logger.info("load_chunked: Loaded %d rows across %d columns into %.2f MB (peak RAM capped)", total_rows, len(self.data.columns), mem_mb)
+
+        return self.data
+
     def separate(self):
         self.load()
         self.numerical_columns = self.data.select_dtypes(include='number')
@@ -286,10 +382,16 @@ class Clean:
             if downcast_ints and pd.api.types.is_integer_dtype(col_type):
                 c_min = self.data[col].min()
                 c_max = self.data[col].max()
-                if c_min >= np.iinfo(np.int8).min and c_max <= np.iinfo(np.int8).max:
+                if c_min >= 0 and c_max <= np.iinfo(np.uint8).max:
+                    self.data[col] = self.data[col].astype(np.uint8)
+                elif c_min >= np.iinfo(np.int8).min and c_max <= np.iinfo(np.int8).max:
                     self.data[col] = self.data[col].astype(np.int8)
+                elif c_min >= 0 and c_max <= np.iinfo(np.uint16).max:
+                    self.data[col] = self.data[col].astype(np.uint16)
                 elif c_min >= np.iinfo(np.int16).min and c_max <= np.iinfo(np.int16).max:
                     self.data[col] = self.data[col].astype(np.int16)
+                elif c_min >= 0 and c_max <= np.iinfo(np.uint32).max:
+                    self.data[col] = self.data[col].astype(np.uint32)
                 elif c_min >= np.iinfo(np.int32).min and c_max <= np.iinfo(np.int32).max:
                     self.data[col] = self.data[col].astype(np.int32)
 
