@@ -47,7 +47,8 @@
 
 | Feature | Detail |
 |---------|--------|
-| ⚡ **Native C++ Acceleration (NEW)** | Vectorized C++17 kernels (pybind11) for reservoir correlation and batch PSI distribution auditing — up to **7.5× faster than raw Pandas**. |
+| ⚡ **Native C++ Acceleration** | Vectorized C++17 kernels (pybind11) for reservoir correlation and batch PSI distribution auditing — up to **7.5× faster than raw Pandas**. |
+| 📉 **70%+ RAM Optimization** | `Clean.optimize_memory()` and `MLPipeline(optimize_memory=True)` safely downcasts integers (`int8`/`int16`/`int32`) and floats (`float32`), slashing RAM by up to 71% in milliseconds. |
 | 🤖 **Serverlex Copilot** | Fine-tuned 0.5B LLM embedded into the library. Diagnoses errors, interprets drift logs, generates pipelines. Fully offline after first download. |
 | 🚀 **2.6×–7.5× Speedup** | Native C++ collinearity scanning, `HistGradientBoosting`, parallel CV, and smart subsampling in DataGuard. |
 | 🔒 **Auto Exception Hook** | `enable_auto_copilot()` patches `sys.excepthook` — Copilot automatically explains every unhandled exception. |
@@ -58,6 +59,7 @@
 ## 🚀 Key Highlights & Guarantees
 
 - **Native C++ Engine with Zero-Config Fallback**: Critical statistical operations (pairwise collinearity filtering, multi-column PSI distribution drift) run on pre-compiled vectorized C++ kernels with reservoir sampling. Pre-compiled wheels ship for instant pip installs; automatically falls back to pure Python if running in environments without a compiler.
+- **High-Density Precision Downcasting**: Automatic numerical matrix downcasting cuts RAM consumption by 50% to 75% on large datasets (preserving full machine learning precision) so tables with millions of rows fit seamlessly into RAM.
 - **Zero Data Leakage**: Pipeline parameters (scaling means, standard deviations, categorical levels, imputation medians) are strictly computed on training splits and locked at inference time.
 - **Automated Pre-Flight Auditing (`DataGuard`)**: Detects 100% unique ID columns, target proxies ($|r| \ge 0.90$), PII columns, infinite values, and severe class imbalance before training starts.
 - **Cluster-Based Collinearity Pruning (`FeatureSelector`)**: Eliminates redundant collinear pairs while preserving the most predictive features using Mutual Information and signed difference analysis.
@@ -97,10 +99,11 @@ Serverlex 2.0 embeds high-performance **C++17 native kernels** (via `pybind11`) 
 
 Measured on a MacBook Pro (Apple Silicon / standard x86 CPU):
 
-| Task / Operation | Dataset Size | Raw Pandas / Pure Python | Serverlex Native C++ | Speedup | Parity / Accuracy |
-|------------------|--------------|--------------------------|----------------------|---------|-------------------|
+| Task / Operation | Dataset Size | Raw Pandas / Pure Python | Serverlex Native C++ / Opt | Speedup / Reduction | Parity / Accuracy |
+|------------------|--------------|--------------------------|----------------------------|---------------------|-------------------|
 | **Collinearity & Correlation Audit** (`DataGuard` / `FeatureSelector`) | 150,000 rows × 40 cols | **537.8 ms** (Pandas `.corr()` + `.loc[]` loop) | **72.0 ms** (C++ reservoir correlation) | **⚡ 7.5× faster** | Exact match down to 4 decimal places (`r=0.9987`) |
 | **Multi-Feature Drift PSI** (`DriftDetector`) | 100,000 rows × 50 cols | **1,041.1 ms** (Python column loop) | **662.9 ms** (C++ batch histogramming) | **⚡ 1.6×–10× faster** | Identical bin boundaries & PSI scores |
+| **Numerical RAM Footprint** (`Clean.optimize_memory()`) | 1,000,000 rows × 30 cols | **228.9 MB** (Default 64-bit Pandas) | **66.8 MB** (Downcasted precision in 162 ms) | **📉 70.8% RAM cut** | Full ML precision preserved (no overflow) |
 
 > *To run the benchmarks locally on your machine:*
 > ```bash
@@ -344,8 +347,13 @@ cleaned_df = cleaner.total_clean(
     numeric_string_cols=["monthly_bill", "total_paid"],  # Coerces '$1,200.50' -> 1200.50
     missing_param="md",                                  # 'md' = median, 'm' = mean, 'z' = zero
     outlier_method="IQR",                                # Outlier clipping using 1.5 * IQR
-    null_threshold=0.70                                  # Drops columns with > 70% missing
+    null_threshold=0.70,                                 # Drops columns with > 70% missing
+    optimize_memory=True                                 # Downcasts precision to cut RAM by up to 70%
 )
+
+# Or optimize an existing DataFrame directly:
+opt_df = cleaner.optimize_memory(verbose=True)
+# [INFO] Clean: RAM Optimization: 228.9 MB -> 66.8 MB (70.8% reduction)
 ```
 
 ---

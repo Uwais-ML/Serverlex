@@ -18,7 +18,7 @@ if not logger.handlers:
 
 
 class MLPipeline:
-    def __init__(self, data=None):
+    def __init__(self, data=None, optimize_memory=False):
         self.data=None
         self.cleaner=None
         self.target=None
@@ -40,6 +40,7 @@ class MLPipeline:
         self.custom_models={}
         self.X_train=None
         self.y_train=None
+        self.optimize_memory=optimize_memory
 
         if data is not None:
             self.load_data(data)
@@ -75,6 +76,8 @@ class MLPipeline:
             self.scale=scale
             self.numeric_string_cols=[c.strip().lower().replace(' ', '_') for c in (numeric_string_cols or [])]
             self.drop_id_cols=drop_id_cols
+            if "optimize_memory" in kwargs:
+                self.optimize_memory = bool(kwargs.pop("optimize_memory"))
 
             logger.info("Fitting pipeline on %d rows (target=%s, encode=%s, scale=%s)", len(self.data), self.target, self.encode, self.scale)
 
@@ -108,7 +111,7 @@ class MLPipeline:
 
             # 1. Clean the training data using your Clean class with target protection
             clean_kwargs = kwargs.copy()
-            for key in ["auto_remediate", "drop_leakage", "leakage_threshold", "drop_pii", "drop_id_cols", "id_cols"]:
+            for key in ["auto_remediate", "drop_leakage", "leakage_threshold", "drop_pii", "drop_id_cols", "id_cols", "optimize_memory"]:
                 clean_kwargs.pop(key, None)
             if self.target:
                 exclude = clean_kwargs.get("exclude_outliers", [])
@@ -372,6 +375,21 @@ class MLPipeline:
                 for col in self.scaler_median.keys():
                     if col in X.columns:
                         X[col]=(X[col] - self.scaler_median[col]) / self.scaler_iqr[col]
+
+            # 8. Downcast numerical precision to reduce RAM (optional)
+            if self.optimize_memory:
+                float_cols = X.select_dtypes(include=['float64']).columns
+                if len(float_cols) > 0:
+                    X[float_cols] = X[float_cols].astype(np.float32)
+                int_cols = X.select_dtypes(include=['int64']).columns
+                for ic in int_cols:
+                    imin, imax = X[ic].min(), X[ic].max()
+                    if imin >= np.iinfo(np.int8).min and imax <= np.iinfo(np.int8).max:
+                        X[ic] = X[ic].astype(np.int8)
+                    elif imin >= np.iinfo(np.int16).min and imax <= np.iinfo(np.int16).max:
+                        X[ic] = X[ic].astype(np.int16)
+                    elif imin >= np.iinfo(np.int32).min and imax <= np.iinfo(np.int32).max:
+                        X[ic] = X[ic].astype(np.int32)
 
             if has_target:
                 return X, target_series

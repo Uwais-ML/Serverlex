@@ -89,6 +89,34 @@ def run_benchmarks():
     print(f"  • Serverlex C++ Batch       : {t_batch * 1000:7.1f} ms")
     print(f"  ⚡ PSI Batch Speedup         : {t_py / t_batch:.1f}× faster!")
 
+    # -----------------------------------------------------------------------
+    # 3. Precision Downcasting RAM Optimization Benchmark
+    # -----------------------------------------------------------------------
+    from serverlex import Clean
+    N_mem, M_mem = 1_000_000, 30
+    print(f"\n[3] Precision Downcasting RAM Benchmark ({N_mem:,} rows × {M_mem} columns):")
+    mem_data = {}
+    for i in range(10):
+        mem_data[f"int_tiny_{i}"] = rng.integers(-100, 100, N_mem, dtype=np.int64)
+    for i in range(10):
+        mem_data[f"int_med_{i}"] = rng.integers(-30000, 30000, N_mem, dtype=np.int64)
+    for i in range(10):
+        mem_data[f"float_{i}"] = rng.normal(0, 1, N_mem).astype(np.float64)
+
+    df_mem = pd.DataFrame(mem_data)
+    cleaner = Clean(df_mem)
+    t0 = time.perf_counter()
+    cleaner.optimize_memory(verbose=False)
+    t_opt = time.perf_counter() - t0
+
+    start_mb = cleaner.memory_summary["start_mem_mb"]
+    end_mb = cleaner.memory_summary["end_mem_mb"]
+    saved_pct = cleaner.memory_summary["reduction_pct"]
+
+    print(f"  • Raw 64-bit Pandas RAM     : {start_mb:7.1f} MB")
+    print(f"  • Downcasted Precision RAM  : {end_mb:7.1f} MB (completed in {t_opt*1000:.1f} ms)")
+    print(f"  📉 RAM Consumption Cut       : {saved_pct:.1f}% reduction!")
+
     print("\n" + "=" * 70)
     print("✅ All parity checks passed — Serverlex delivers genuine native C++ speedups!")
     print("=" * 70)

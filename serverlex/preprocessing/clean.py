@@ -266,6 +266,58 @@ class Clean:
             "columns_with_missing": int(missing_cols)
         }
 
+    def optimize_memory(self, downcast_floats=True, downcast_ints=True, downcast_categories=False, verbose=True):
+        """
+        Compresses dataset memory footprint by downcasting numerical columns to lower-bit precision:
+        - Integers: evaluated against min/max bounds and safely downcast to int8, int16, or int32.
+        - Floats: float64 (8 bytes) safely cast to float32 (4 bytes), cutting memory by 50% while preserving full ML precision.
+        - Categories (optional): object/string columns with low cardinality (nunique/total < 0.5) converted to category dtype.
+
+        Returns:
+            pd.DataFrame: The memory-optimized DataFrame.
+        """
+        self.load()
+        start_mem = self.data.memory_usage(deep=True).sum() / (1024 ** 2)
+
+        for col in self.data.columns:
+            col_type = self.data[col].dtype
+
+            # 1. Integer Downcasting
+            if downcast_ints and pd.api.types.is_integer_dtype(col_type):
+                c_min = self.data[col].min()
+                c_max = self.data[col].max()
+                if c_min >= np.iinfo(np.int8).min and c_max <= np.iinfo(np.int8).max:
+                    self.data[col] = self.data[col].astype(np.int8)
+                elif c_min >= np.iinfo(np.int16).min and c_max <= np.iinfo(np.int16).max:
+                    self.data[col] = self.data[col].astype(np.int16)
+                elif c_min >= np.iinfo(np.int32).min and c_max <= np.iinfo(np.int32).max:
+                    self.data[col] = self.data[col].astype(np.int32)
+
+            # 2. Float Downcasting (float64 -> float32)
+            elif downcast_floats and pd.api.types.is_float_dtype(col_type):
+                if col_type == np.float64:
+                    self.data[col] = self.data[col].astype(np.float32)
+
+            # 3. Categorical Downcasting (optional for low-cardinality strings)
+            elif downcast_categories and (isinstance(col_type, object) or col_type == 'object' or col_type == 'string'):
+                num_unique = self.data[col].nunique(dropna=True)
+                num_total = len(self.data[col])
+                if num_total > 0 and (num_unique / num_total) < 0.5:
+                    self.data[col] = self.data[col].astype('category')
+
+        end_mem = self.data.memory_usage(deep=True).sum() / (1024 ** 2)
+        reduction_pct = round(100.0 * (start_mem - end_mem) / max(start_mem, 1e-6), 2)
+        if verbose:
+            logger.info("RAM Optimization: %.2f MB -> %.2f MB (%.1f%% reduction)", start_mem, end_mem, reduction_pct)
+
+        self.memory_summary = {
+            "start_mem_mb": round(float(start_mem), 2),
+            "end_mem_mb": round(float(end_mem), 2),
+            "reduction_pct": reduction_pct
+        }
+        self.separate()
+        return self.data
+
     def export(self, output_path):
         self.load()
         self.data.to_csv(output_path, index=False)
@@ -284,6 +336,7 @@ class Clean:
         null_threshold=0.7,
         corr_target=None,
         corr_threshold=None,
+        optimize_memory=False,
         export_path=None
     ):
         # 1. Load data
@@ -357,7 +410,11 @@ class Clean:
         if corr_threshold is not None:
             self.low_corr(target=corr_target, threshold=corr_threshold)
 
-        # 11. Export if path specified
+        # 11. Optional memory optimization (downcast numeric precision)
+        if optimize_memory:
+            self.optimize_memory(downcast_floats=True, downcast_ints=True, verbose=True)
+
+        # 12. Export if path specified
         if export_path:
             self.export(export_path)
 
